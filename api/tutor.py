@@ -519,6 +519,9 @@ async def update_task(
     session.add(task)
     session.commit()
     session.refresh(task)
+    # Live-Update: offene Skript-/Slides-Previews aktualisieren die Refmap,
+    # damit @task:-Boxen (Titel/Punkte) ohne Reload neu gerendert werden.
+    notifications.push_content_updated(session, task.course_id, "task", int(task.id))
     sync_media_usages(session, task.course_id)
     if task.task_type.value == "workspace":
         # Selbstheilung: Stub-Skripte direkt anlegen, wenn der Datei-Baum
@@ -560,6 +563,8 @@ async def delete_task(
     task_course_id = task.course_id
     task_title = task.title
     trash_service.soft_delete(session, task)
+    # Live-Update: @task:-Referenzen in offenen Previews zeigen jetzt ❓.
+    notifications.push_content_updated(session, task_course_id, "task", int(task.id))
     sync_media_usages(session, task_course_id)
     return {"message": f"Aufgabe '{task_title}' in den Papierkorb gelegt."}
 

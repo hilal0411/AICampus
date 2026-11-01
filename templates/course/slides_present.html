@@ -334,9 +334,10 @@ aicampusMountDeck();
 
 // ─── Live-Update (MCP): Deck extern bearbeitet → Remount auf der Folie ───
 aicampusWatchContent(courseId, async (data) => {
-  if (data.entity_type === "reference") {
-    // Quelle angelegt/geändert → Zitationen in der Präsentation:
-    // Refmap neu laden, dann Deck auf der aktuellen Folie neu mounten.
+  if (data.entity_type === "reference" || data.entity_type === "task") {
+    // Quelle/Aufgabe angelegt/geändert → Zitationen & Aufgaben-Boxen in der
+    // Präsentation: Refmap neu laden, dann Deck auf der aktuellen Folie
+    // neu mounten.
     await refreshCourseRefMap();
   } else if (data.entity_type !== "slide_deck" || data.entity_id !== DECK_ID) {
     return;

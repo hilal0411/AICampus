@@ -389,9 +389,9 @@
   // sonst gezieltes Remount der Kachel.
   function slLiveDeckUpdate(deckId) { slRemountDeck(deckId, true); }
   aicampusWatchContent(courseId, (data) => {
-    if (data.entity_type === "reference") {
-      // Quelle angelegt/geändert → Zitationen in allen Kacheln:
-      // Refmap neu laden + alle Kacheln stumm neu mounten.
+    if (data.entity_type === "reference" || data.entity_type === "task") {
+      // Quelle/Aufgabe angelegt/geändert → Zitationen & Aufgaben-Boxen in
+      // allen Kacheln: Refmap neu laden + alle Kacheln stumm neu mounten.
       refreshCourseRefMap().then(() => {
         for (const deckId of deckStates.keys()) slRemountDeck(deckId, false);
       });
