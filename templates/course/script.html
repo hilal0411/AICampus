@@ -51,6 +51,17 @@
      Beide Modi aktiv → Preview oben, Editor unten, dazwischen der
      ziehbare Trenner wie im Code-Task-Workspace. */
   .sq-e-panes { height: calc(100vh - 200px); min-height: 380px; }
+  /* Höhen-Grip unten rechts (eigener Drag, s. sqeInitContent) — CSS
+     resize:vertical geht nicht: der native Grip wird vom Browser gedraggt
+     und scrollt die Seite mit, sobald der Griff das Viewport verlässt.
+     Höhe pro Kapitel merken (localStorage). Look wie nativer Resize-Grip. */
+  .sq-e-resize {
+    position: absolute; right: 3px; bottom: 3px; width: 16px; height: 16px;
+    display: flex; align-items: center; justify-content: center;
+    color: #9ca3af; cursor: nwse-resize; touch-action: none; z-index: 5;
+    opacity: 0.6; transition: opacity 0.15s, color 0.15s;
+  }
+  .sq-e-resize:hover, .sq-e-resize.sqe-resize-dragging { opacity: 1; color: #4f46e5; }
   .sq-e-pane { flex: 1 1 0; min-height: 0; overflow-anchor: none; }
   /* Trenner immer waagerecht (Preview oben, Editor unten) — setzt sich
      gegen die Breakpoint-Regeln der workspace.css durch (gleiche
@@ -382,8 +393,8 @@
         <!-- Inhaltsbereich: maximal Fensterhöhe (interner Scroll statt
              Seiten-Scroll). Beide Modi aktiv → Preview oben, Editor unten,
              dazwischen ziehbarer Trenner (Look wie im Code-Task-Workspace). -->
-        <div id="sqe-panes-${key}" class="sq-e-panes flex flex-col border border-gray-200 rounded-lg overflow-hidden bg-white">
-          <div id="sqe-pane-preview-${key}" class="sq-e-pane overflow-y-auto p-4 bg-white"></div>
+        <div id="sqe-panes-${key}" class="sq-e-panes relative flex flex-col border border-gray-200 rounded-lg overflow-hidden bg-white">
+          <div id="sqe-pane-preview-${key}" class="sq-e-pane sq-e-pane-preview overflow-y-auto p-4 bg-white"></div>
           <div id="sqe-split-${key}" class="ws-split-handle sq-e-split" role="separator"
                title="Ziehen: Preview/Editor vergrößern · Doppelklick: Standardgröße"></div>
           <div id="sqe-pane-editor-${key}" class="sq-e-pane overflow-hidden relative">
@@ -395,6 +406,11 @@
                         placeholder="Markdown-Inhalt des Kapitels (fett, kursiv, Listen, $Math$, Mermaid)…"
                         class="w-full h-full text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
             </div>
+          </div>
+          <!-- Höhen-Grip: Ziehen = Pane-Höhe, Doppelklick = Standardhöhe -->
+          <div id="sqe-resize-${key}" class="sq-e-resize" role="separator" aria-orientation="horizontal"
+               title="Ziehen: Höhe ändern · Doppelklick: Standardhöhe">
+            <svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.5 8.5 L8.5 1.5 M5.5 8.5 L8.5 5.5"/></svg>
           </div>
         </div>
         <p class="text-xs text-gray-400 mt-2">💡 Markdown und LaTeX werden unterstützt (Medien: <code>{height=X}</code> = Max-Höhe in px, Applets zusätzlich <code>{zoom=X}</code>).</p>
@@ -492,12 +508,54 @@
       editorPane.style.flex = '';
       if (contentEditor.cm) contentEditor.cm.refresh();
     });
-    // Fensterwechsel: Editor-Höhe in den verfügbaren Bereich klemmen
-    window.addEventListener('resize', () => {
+    // Fixe Editor-Höhe (nach Split-Drag) in die verfügbare Pane-Höhe
+    // klemmen (Fensterwechsel / Pane-Resize).
+    const clampEditorPane = () => {
       if (!editorPane.style.height || !panes.isConnected) return;
       const clamped = Math.max(SPLIT_MIN, Math.min(parseFloat(editorPane.style.height) || 0, panes.clientHeight - SPLIT_MIN));
       if (clamped !== parseFloat(editorPane.style.height)) editorPane.style.height = clamped + 'px';
-    });
+    };
+    window.addEventListener('resize', clampEditorPane);
+    // Gesamte Pane (Preview/Editor) per Ziehhgriff unten rechts in der
+    // Höhe anpassbar; Höhe pro Kapitel merken (localStorage, wie der
+    // Markdown-Editor in task_solve_text). Eigener Drag (Pointer Events +
+    // Capture) statt CSS resize:vertical — der native Grip wird vom Browser
+    // übernommen und scrollt die Seite mit, sobald der Griff das Viewport
+    // verlässt (beim Vergrößern passiert das sofort).
+    const panesHKey = 'sqe-panes-h-' + key;
+    const storedPanesH = localStorage.getItem(panesHKey);
+    if (storedPanesH) panes.style.height = storedPanesH + 'px';
+    const resizeGrip = document.getElementById('sqe-resize-' + key);
+    if (resizeGrip) {
+      const PANE_MIN = 380; // passt zu .sq-e-panes min-height
+      resizeGrip.addEventListener('pointerdown', (e) => {
+        e.preventDefault();
+        resizeGrip.setPointerCapture(e.pointerId);
+        const startY = e.clientY;
+        const startH = panes.offsetHeight;
+        resizeGrip.classList.add('sqe-resize-dragging');
+        const onMove = (ev) => {
+          panes.style.height = Math.max(PANE_MIN, startH + (ev.clientY - startY)) + 'px';
+          clampEditorPane();
+        };
+        const onUp = () => {
+          resizeGrip.removeEventListener('pointermove', onMove);
+          resizeGrip.removeEventListener('pointerup', onUp);
+          resizeGrip.removeEventListener('pointercancel', onUp);
+          resizeGrip.classList.remove('sqe-resize-dragging');
+          localStorage.setItem(panesHKey, String(panes.offsetHeight));
+        };
+        resizeGrip.addEventListener('pointermove', onMove);
+        resizeGrip.addEventListener('pointerup', onUp);
+        resizeGrip.addEventListener('pointercancel', onUp);
+      });
+      // Doppelklick: zurück zur Standardhöhe (calc(100vh - 200px))
+      resizeGrip.addEventListener('dblclick', () => {
+        panes.style.height = '';
+        localStorage.removeItem(panesHKey);
+        clampEditorPane();
+      });
+    }
 
     // Preview-Scroll → Editor: das oberste sichtbare Preview-Block
     // (data-src-line aus renderMarkdown(sourceLines)) bestimmt die
@@ -510,7 +568,9 @@
         if (!modes.preview || !contentEditor.cm) return;
         const wrap = previewPane.querySelector('.markdown-preview');
         if (!wrap) return;
-        const top = previewPane.getBoundingClientRect().top + 2;
+        // Lead: Der Editor springt schon ~15 px vorher an die nächste
+        // Zeile — nicht erst, wenn der Block die Pane-Kante erreicht.
+        const top = previewPane.getBoundingClientRect().top + 2 + 15;
         const els = wrap.querySelectorAll('[data-src-line]');
         // Default: erstes Element — bei scrollTop=0 liegt es unter der
         // Pane-Kante (p-4-Padding) und würde sonst nie erwischt.
