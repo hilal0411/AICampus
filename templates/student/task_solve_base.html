@@ -107,11 +107,13 @@
             <!-- Hints werden hier geladen -->
           </div>
 
-          <div class="flex gap-2 pt-2 pb-2 bg-red-50" style="position:sticky;bottom:0px;">
-            <input type="text" id="hint-input" placeholder="Deine Frage..."
-                   class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+          <div class="flex items-end gap-2 pt-2 pb-2 bg-red-50" style="position:sticky;bottom:0px;">
+            {# Textarea statt Input: mehrzeilige Fragen, Enter = Senden,
+               Shift+Enter = Zeilenumbruch (wie im Forum). #}
+            <textarea id="hint-input" rows="1" maxlength="2000" placeholder="Deine Frage… (Markdown & LaTeX werden gerendert)"
+                   class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm resize-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                    style="min-width: 0;"
-                   onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); requestHint();}">
+                   onkeydown="if(event.key==='Enter' && !event.shiftKey){event.preventDefault(); requestHint();}"></textarea>
             <button type="button" id="hint-send-btn" onclick="requestHint()"
                     class="shrink-0 bg-blue-600 text-white px-3 py-2 rounded-lg text-lg font-bold hover:bg-blue-700 transition">
               ⌕
@@ -1505,6 +1507,13 @@
   {% if task.hints_enabled %}
   const hintInput = document.getElementById('hint-input');
   const hintSendBtn = document.getElementById('hint-send-btn');
+  // Textarea wächst mit dem Inhalt (max. 160 px) — wie im Forum.
+  hintInput.addEventListener('input', () => {
+    hintInput.style.height = 'auto';
+    const cs = getComputedStyle(hintInput);
+    const border = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+    hintInput.style.height = Math.min(hintInput.scrollHeight + border, 160) + 'px';
+  });
   const hintHistory = document.getElementById('hint-history');
   const hintChevron = document.getElementById('hint-chevron');
   const hintError = document.getElementById('hint-error');
@@ -1548,10 +1557,21 @@
     const bubble = document.createElement('div');
     bubble.className = 'bg-gray-50 rounded-lg p-3 border border-gray-200';
 
+    // Frage: Markdown + LaTeX (breaks: Zeilenumbrüche bleiben erhalten),
+    // Fallback: Rohtext bei Renderer-Fehler.
     const qDiv = document.createElement('div');
-    qDiv.className = 'text-sm text-gray-600 mb-1.5 font-medium';
-    qDiv.textContent = '❓ ' + escapeHtml(question);
+    qDiv.className = 'text-sm text-gray-600 mb-1.5 font-medium flex items-start gap-1.5';
+    const qIcon = document.createElement('span');
+    qIcon.textContent = '❓';
+    qDiv.appendChild(qIcon);
+    const qMd = document.createElement('div');
+    qMd.className = 'hint-question flex-1 min-w-0';
+    qDiv.appendChild(qMd);
     bubble.appendChild(qDiv);
+    renderMarkdown(question, qMd, { breaks: true }).catch((e) => {
+      console.warn('Failed to render hint question markdown:', e);
+      qMd.textContent = question;
+    });
 
     const responseDiv = document.createElement('div');
     responseDiv.className = 'text-sm text-gray-800';
@@ -1615,6 +1635,7 @@
     }
 
     hintInput.value = '';
+    hintInput.style.height = 'auto';
     hintInput.disabled = true;
     hintSendBtn.disabled = true;
     hintError.classList.add('hidden');

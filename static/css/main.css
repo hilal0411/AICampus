@@ -231,6 +231,26 @@
   margin-bottom: 0.25rem !important;
 }
 
+/* Frage-Texte (Skript-Fragen + Hinweis-Fragen): gleicher Renderer wie
+   Forum — kurz Nachrichten, kein Dokument: text-sm statt Dokument-Größe,
+   kein Absatz-Abstand oben/unten. */
+.sq-question-text .markdown-preview,
+.sq-temp-question .markdown-preview,
+.hint-question .markdown-preview {
+  font-size: 0.875rem !important;
+  line-height: 1.6 !important;
+}
+.sq-question-text .markdown-preview > :first-child,
+.sq-temp-question .markdown-preview > :first-child,
+.hint-question .markdown-preview > :first-child {
+  margin-top: 0 !important;
+}
+.sq-question-text .markdown-preview > :last-child,
+.sq-temp-question .markdown-preview > :last-child,
+.hint-question .markdown-preview > :last-child {
+  margin-bottom: 0 !important;
+}
+
 .markdown-preview strong {
   font-weight: 700 !important;
 }

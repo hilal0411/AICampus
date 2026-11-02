@@ -1816,13 +1816,21 @@
       </div>
       ${q.section_title ? `<div class="mt-1.5"><span class="px-1.5 py-0.5 rounded bg-gray-100 text-[10px] font-semibold text-gray-500">📖 ${sqEscapeHtml(q.section_title)}</span></div>` : ''}
       ${q.quote ? `<div class="sq-quote-block mt-2 bg-yellow-50 border-l-4 border-yellow-300 rounded-r-lg px-2.5 py-1.5 text-xs text-gray-600 break-words${jumpCls} hover:bg-yellow-100"${jumpTitle}>📖 „${sqEscapeHtml(q.quote)}“</div>` : ''}
-      <div class="sq-question-text mt-1.5 text-sm text-gray-800 whitespace-pre-wrap break-words${jumpCls} hover:text-blue-700"${jumpTitle}>${sqEscapeHtml(q.question)}</div>
+      <div class="sq-question-text mt-1.5 text-sm text-gray-800 break-words${jumpCls} hover:text-blue-700"${jumpTitle}></div>
       <div class="sq-responses"></div>
       <div class="mt-2 flex items-center gap-2">
         <input type="text" maxlength="8000" placeholder="Antwort schreiben…" class="sq-answer-input flex-1 min-w-0 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
         <button type="button" class="sq-answer-send text-blue-600 hover:text-blue-800 text-sm font-semibold shrink-0" data-id="${q.id}">Senden</button>
       </div>
     `;
+    // Frage: Markdown + LaTeX (breaks: Zeilenumbrüche bleiben erhalten);
+    // Fallback: Rohtext bei Renderer-Fehler. Klick-Ziel (Springen) bleibt
+    // der Container — das Rendering ersetzt nur seinen Inhalt.
+    const qTextEl = el.querySelector('.sq-question-text');
+    await renderMarkdown(q.question || '', qTextEl, { breaks: true }).catch((e) => {
+      console.warn('Failed to render question markdown:', e);
+      qTextEl.textContent = q.question;
+    });
     const respList = el.querySelector('.sq-responses');
     for (const r of q.responses) respList.appendChild(await sqResponseEl(r));
     if (jumpable) {
@@ -1852,7 +1860,7 @@
     return el;
   }
 
-  function sqTempThreadEl(tempId, question, selection) {
+  async function sqTempThreadEl(tempId, question, selection) {
     const el = document.createElement('div');
     el.className = 'sq-thread bg-white rounded-xl border border-blue-200 p-3';
     el.dataset.sqId = tempId;
@@ -1865,8 +1873,13 @@
         <span class="text-[11px] text-gray-400 ml-auto shrink-0">gerade eben</span>
       </div>
       ${selection && selection.quote ? `<div class="mt-2 bg-yellow-50 border-l-4 border-yellow-300 rounded-r-lg px-2.5 py-1.5 text-xs text-gray-600 break-words">📖 „${sqEscapeHtml(selection.quote)}“${selection.sectionTitle ? ` <span class="text-gray-400">— ${sqEscapeHtml(selection.sectionTitle)}</span>` : ''}</div>` : ''}
-      <div class="mt-1.5 text-sm text-gray-800 whitespace-pre-wrap break-words">${sqEscapeHtml(question)}</div>
+      <div class="sq-temp-question mt-1.5 text-sm text-gray-800 break-words"></div>
     `;
+    const qEl = el.querySelector('.sq-temp-question');
+    await renderMarkdown(question, qEl, { breaks: true }).catch((e) => {
+      console.warn('Failed to render question markdown:', e);
+      qEl.textContent = question;
+    });
     return el;
   }
 
@@ -1882,7 +1895,7 @@
     const tempId = 'temp-' + Date.now();
     const empty = list.querySelector('p');
     if (empty) empty.remove();
-    list.prepend(sqTempThreadEl(tempId, question, sqSelection));
+    list.prepend(await sqTempThreadEl(tempId, question, sqSelection));
     sqSwitchTab('mine');
 
     // Die KI-Antwort kommt asynchron im Hintergrund und erscheint per Polling.
