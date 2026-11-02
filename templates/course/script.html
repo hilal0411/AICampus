@@ -137,7 +137,7 @@
         <button id="sq-quote-clear" type="button" class="text-gray-400 hover:text-gray-600 leading-none" title="Auswahl entfernen">✕</button>
       </div>
       <div class="flex items-end gap-2">
-        <textarea id="sq-input" rows="2" maxlength="2000" placeholder="Frage zum Skript stellen…" class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
+        <textarea id="sq-input" rows="2" maxlength="2000" placeholder="Frage… (Markdown & LaTeX)" class="flex-1 border border-gray-300 rounded-lg px-3 py-2 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
         <button id="sq-send" type="button" class="bg-blue-600 hover:bg-blue-700 text-white w-10 h-10 rounded-lg text-lg transition shrink-0" title="Frage stellen">➤</button>
       </div>
     </div>
@@ -1819,7 +1819,7 @@
       <div class="sq-question-text mt-1.5 text-sm text-gray-800 break-words${jumpCls} hover:text-blue-700"${jumpTitle}></div>
       <div class="sq-responses"></div>
       <div class="mt-2 flex items-center gap-2">
-        <input type="text" maxlength="8000" placeholder="Antwort schreiben…" class="sq-answer-input flex-1 min-w-0 border border-gray-300 rounded-lg px-3 py-1.5 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <textarea rows="1" maxlength="8000" placeholder="Antwort… (Markdown & LaTeX)" class="sq-answer-input flex-1 min-w-0 border border-gray-300 rounded-lg px-3 py-1.5 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"></textarea>
         <button type="button" class="sq-answer-send text-blue-600 hover:text-blue-800 text-sm font-semibold shrink-0" data-id="${q.id}">Senden</button>
       </div>
     `;
@@ -1856,7 +1856,7 @@
         <div class="sq-md markdown-preview mt-0.5 text-sm text-gray-700"></div>
       </div>
     `;
-    await renderMarkdown(r.content || '', el.querySelector('.sq-md'), {});
+    await renderMarkdown(r.content || '', el.querySelector('.sq-md'), { breaks: true });
     return el;
   }
 
@@ -1930,7 +1930,18 @@
   }
 
   // ─── Antworten + Löschen (Event-Delegation in beiden Tabs) ────
+  // Antwort-Textarea wächst mit dem Inhalt (max. 120 px) — wie die
+  // Frage-Eingabe.
+  function sqAnswerGrow(input) {
+    input.style.height = 'auto';
+    input.style.height = Math.min(input.scrollHeight, 120) + 'px';
+  }
   for (const container of [document.getElementById('sq-body-mine'), document.getElementById('sq-body-all')]) {
+    // Auto-Grow der Antwort-Textareas (Event-Delegation: Threads werden
+    // dynamisch neu gebaut)
+    container.addEventListener('input', (e) => {
+      if (e.target.classList && e.target.classList.contains('sq-answer-input')) sqAnswerGrow(e.target);
+    });
     // Status-Dropdown (offen / behandelt) — Chip selbst ist das Select
     container.addEventListener('change', async (e) => {
       const sel = e.target.closest('.sq-status-select');
@@ -1983,6 +1994,7 @@
       const content = input.value.trim();
       if (!content) return;
       input.value = '';
+      input.style.height = 'auto';
       // Hinweis: Der Server prüft im Hintergrund, ob die KI auf die Nachricht
       // antworten soll (Folgefrage an sie, …) — die Antwort erscheint ggf.
       // kurz darauf per Polling, ohne dass die Eingabe blockiert wird.
@@ -1999,14 +2011,16 @@
           const data = await res.json().catch(() => ({}));
           showToast(data.detail || 'Antwort konnte nicht gesendet werden.', 'error');
           input.value = content;
+          input.style.height = 'auto';
         }
       } catch (err) {
         showToast('Fehler: ' + err.message, 'error');
         input.value = content;
+        input.style.height = 'auto';
       }
     });
     container.addEventListener('keydown', (e) => {
-      if (e.key !== 'Enter') return;
+      if (e.key !== 'Enter' || e.shiftKey) return;
       const input = e.target.closest('.sq-answer-input');
       if (!input) return;
       e.preventDefault();

@@ -920,30 +920,65 @@
   background: transparent;
 }
 
-/* Textareas (Forum, Hinweise): schmale, dezente Scrollbar auf hellem
-   Untergrund — die Standard-Scrollbar wirkt im eingeklemmten Text
-   (Clamp auf 160 px) zu plump. */
+/* Textareas (Forum, Hinweise, Skript-Fragen/Antworten): schmale, dezente
+   Scrollbar auf hellem Untergrund — die Standard-Scrollbar wirkt im
+   eingeklemmten Text (Auto-Grow mit Clamp) zu plump. */
 #forum-input,
-#hint-input {
+#hint-input,
+#sq-input,
+.sq-answer-input {
   scrollbar-color: #cbd5e1 transparent;
   scrollbar-width: thin;
 }
 #forum-input::-webkit-scrollbar,
-#hint-input::-webkit-scrollbar {
+#hint-input::-webkit-scrollbar,
+#sq-input::-webkit-scrollbar,
+.sq-answer-input::-webkit-scrollbar {
   width: 8px;
   background: transparent;
 }
 #forum-input::-webkit-scrollbar-thumb,
-#hint-input::-webkit-scrollbar-thumb {
+#hint-input::-webkit-scrollbar-thumb,
+#sq-input::-webkit-scrollbar-thumb,
+.sq-answer-input::-webkit-scrollbar-thumb {
   background-color: #cbd5e1;
   border-radius: 4px;
 }
 #forum-input::-webkit-scrollbar-thumb:hover,
-#hint-input::-webkit-scrollbar-thumb:hover {
+#hint-input::-webkit-scrollbar-thumb:hover,
+#sq-input::-webkit-scrollbar-thumb:hover,
+.sq-answer-input::-webkit-scrollbar-thumb:hover {
   background-color: #94a3b8;
 }
 #forum-input::-webkit-scrollbar-track,
-#hint-input::-webkit-scrollbar-track {
+#hint-input::-webkit-scrollbar-track,
+#sq-input::-webkit-scrollbar-track,
+.sq-answer-input::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Frage-Dialog: schmale, dezente Scrollbars in den Listen (analog) */
+#sq-body-mine,
+#sq-body-all {
+  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-width: thin;
+}
+#sq-body-mine::-webkit-scrollbar,
+#sq-body-all::-webkit-scrollbar {
+  width: 8px;
+  background: transparent;
+}
+#sq-body-mine::-webkit-scrollbar-thumb,
+#sq-body-all::-webkit-scrollbar-thumb {
+  background-color: #cbd5e1;
+  border-radius: 4px;
+}
+#sq-body-mine::-webkit-scrollbar-thumb:hover,
+#sq-body-all::-webkit-scrollbar-thumb:hover {
+  background-color: #94a3b8;
+}
+#sq-body-mine::-webkit-scrollbar-track,
+#sq-body-all::-webkit-scrollbar-track {
   background: transparent;
 }
 
