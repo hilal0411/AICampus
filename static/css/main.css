@@ -920,6 +920,33 @@
   background: transparent;
 }
 
+/* Textareas (Forum, Hinweise): schmale, dezente Scrollbar auf hellem
+   Untergrund — die Standard-Scrollbar wirkt im eingeklemmten Text
+   (Clamp auf 160 px) zu plump. */
+#forum-input,
+#hint-input {
+  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-width: thin;
+}
+#forum-input::-webkit-scrollbar,
+#hint-input::-webkit-scrollbar {
+  width: 8px;
+  background: transparent;
+}
+#forum-input::-webkit-scrollbar-thumb,
+#hint-input::-webkit-scrollbar-thumb {
+  background-color: #cbd5e1;
+  border-radius: 4px;
+}
+#forum-input::-webkit-scrollbar-thumb:hover,
+#hint-input::-webkit-scrollbar-thumb:hover {
+  background-color: #94a3b8;
+}
+#forum-input::-webkit-scrollbar-track,
+#hint-input::-webkit-scrollbar-track {
+  background: transparent;
+}
+
 /* ═══════════════════════════════════════════════════════════════
    Markdown Editor Preview Area
    ═══════════════════════════════════════════════════════════════ */
