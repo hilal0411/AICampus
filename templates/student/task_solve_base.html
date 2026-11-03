@@ -725,11 +725,11 @@
 
       return { schedule, flush };
     })();
-    window._textSolutionEditor = createMarkdownEditor('text-editor-container', {
-      buttonAnchor: 'text-editor-toolbar',
+    window._textSolutionEditor = createMdSplitView('text-editor-container', {
+      textareaId: 'text-solution',
+      toggleAnchor: 'text-editor-toolbar',
+      storageKey: 'text-solution-panes-h',
       onValueChange: () => window._textDraftSave.schedule(),
-      resizable: true,
-      resizableKey: 'text-solution-height-' + {{ task.id }}
     });
     {% endif %}
   })();

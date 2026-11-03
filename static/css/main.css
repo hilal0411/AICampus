@@ -920,31 +920,31 @@
   background: transparent;
 }
 
-/* Skript-Edit-Modus: die Scrollbars von Preview-Pane und Editor wie die
+/* Markdown-Split-View: die Scrollbars von Preview-Pane und Editor wie die
    Eingabefelder (Forum/Fragen) — dezent hell auf hellem Grund. Eigene
    Gruppe, weil .cm-scroller sonst die Code-Oberfläche-Regel oben erbt. */
-.sq-e-pane-preview,
-.sq-e-panes .cm-scroller {
+.md-split-pane-preview,
+.md-split-panes .cm-scroller {
   scrollbar-color: #cbd5e1 transparent;
   scrollbar-width: thin;
 }
-.sq-e-pane-preview::-webkit-scrollbar,
-.sq-e-panes .cm-scroller::-webkit-scrollbar {
+.md-split-pane-preview::-webkit-scrollbar,
+.md-split-panes .cm-scroller::-webkit-scrollbar {
   width: 8px;
   height: 8px;
   background: transparent;
 }
-.sq-e-pane-preview::-webkit-scrollbar-thumb,
-.sq-e-panes .cm-scroller::-webkit-scrollbar-thumb {
+.md-split-pane-preview::-webkit-scrollbar-thumb,
+.md-split-panes .cm-scroller::-webkit-scrollbar-thumb {
   background-color: #cbd5e1;
   border-radius: 4px;
 }
-.sq-e-pane-preview::-webkit-scrollbar-thumb:hover,
-.sq-e-panes .cm-scroller::-webkit-scrollbar-thumb:hover {
+.md-split-pane-preview::-webkit-scrollbar-thumb:hover,
+.md-split-panes .cm-scroller::-webkit-scrollbar-thumb:hover {
   background-color: #94a3b8;
 }
-.sq-e-pane-preview::-webkit-scrollbar-track,
-.sq-e-panes .cm-scroller::-webkit-scrollbar-track {
+.md-split-pane-preview::-webkit-scrollbar-track,
+.md-split-panes .cm-scroller::-webkit-scrollbar-track {
   background: transparent;
 }
 
@@ -1009,6 +1009,80 @@
 #sq-body-all::-webkit-scrollbar-track {
   background: transparent;
 }
+
+/* ═══════════════════════════════════════════════════════════════
+   Markdown Split-View (createMdSplitView, markdown-renderer.js):
+   Edit/Preview-Toggle mit Preview oben / Editor unten — Skript-Edit,
+   Text-Lösung, Aufgaben-Markdown-Felder. Eigene Regeln statt
+   .ws-split-handle, weil workspace.css nicht auf allen Seiten
+   geladen ist (nur Workspace-Aufgaben).
+   ═══════════════════════════════════════════════════════════════ */
+
+/* Pane-Bereich: (maximal) Fensterhöhe — intern scrollt der Inhalt
+   statt der Seite, der Toggle bleibt in Reichweite. Per Grip
+   (unten rechts) verkleiner-/vergrößerbar, Höhe pro Instanz in
+   localStorage. */
+.md-split-panes { height: calc(100vh - 200px); min-height: 200px; }
+.md-split-pane { flex: 1 1 0; min-height: 0; overflow-anchor: none; }
+
+/* Ziehbare Trenner (Preview oben / Editor unten) — Look wie
+   .ws-split-handle im Code-Task-Workspace, immer waagerecht. */
+.md-split-divider {
+  position: relative;
+  z-index: 2;
+  flex-shrink: 0;
+  width: 100%;
+  height: 6px;
+  cursor: row-resize;
+  background-color: #f3f4f6;
+  transition: background-color 0.15s;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  overflow: visible;
+  user-select: none; -webkit-user-select: none;
+  touch-action: none;
+}
+/* Drei Punkte mittig (horizontal gedreht wie das Workspace-Handle) */
+.md-split-divider::before {
+  content: "";
+  width: 15px;
+  height: 3px;
+  background-image:
+    radial-gradient(circle 2px, #9ca3af, transparent 98%),
+    radial-gradient(circle 2px, #9ca3af, transparent 98%),
+    radial-gradient(circle 2px, #9ca3af, transparent 98%);
+  background-size: 3px 3px;
+  /* Element ist 15px breit × 3px hoch → Punkte waagerecht verteilen
+     (top/center/bottom würden sich in der 3px-Höhe überlagern) */
+  background-position: center left, center center, center right;
+  background-repeat: no-repeat;
+}
+.md-split-divider:hover,
+.md-split-divider.md-split-dragging { background-color: #d1d5db; }
+/* Während des Drags: globaler Cursor + keine Textauswahl */
+body.md-split-drag { user-select: none; -webkit-user-select: none; cursor: row-resize; }
+
+/* Höhen-Grip unten rechts (eigener Drag statt CSS resize:vertical —
+   der native Grip wird vom Browser gedraggt und scrollt die Seite mit,
+   sobald er das Viewport verlässt). Look wie nativer Resize-Grip. */
+.md-split-grip {
+  position: absolute; right: 8px; bottom: 0px; width: 16px; height: 16px;
+  display: flex; align-items: center; justify-content: center;
+  color: #9ca3af; cursor: ns-resize; touch-action: none; z-index: 5;
+  opacity: 0.6; transition: opacity 0.15s, color 0.15s;
+}
+.md-split-grip:hover, .md-split-grip.md-split-grip-dragging { opacity: 1; color: #4f46e5; }
+
+/* Edit/Preview-Toggle (Look wie die Foto/Zeichnen-Gruppe) */
+.md-split-btn { color: #6b7280; }
+.md-split-btn:hover { color: #374151; }
+.md-split-btn.md-split-active { background-color: #4f46e5; color: #ffffff; }
+.md-split-btn.md-split-active:hover { color: #ffffff; }
+
+/* Editor in der Pane rahmenlos (wie im Workspace) — die Pane rahmt ein;
+   .cm-editor hat ansonsten das Formularfeld-Styling aus main.css */
+.md-split-panes .cm-editor { border: none; border-radius: 0; }
 
 /* ═══════════════════════════════════════════════════════════════
    Markdown Editor Preview Area

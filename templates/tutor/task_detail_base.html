@@ -239,14 +239,15 @@
     <div id="description-editor-container" class="card">
       <h2 class="font-semibold text-gray-800 mb-4">Aufgabenstellung</h2>
 
+      <div class="flex items-center justify-between mb-2">
+        <p id="description-hint" class="text-xs text-gray-400">💡 Markdown und LaTeX ($...$) werden unterstützt.</p>
+        <!-- Edit/Preview-Toggle-Gruppe wird hier von createMdSplitView injiziert -->
+        <div id="description-preview-anchor" class="flex items-center"></div>
+      </div>
+      <!-- createMdSplitView() baut um die Textarea die Edit/Preview-Split-View (s. markdown-renderer.js) -->
       <textarea id="description-textarea" name="description" required rows="8"
                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
                 placeholder="Beschreibe die Aufgabe hier...&#10;&#10;Du kannst Markdown verwenden: **fett**, *kursiv*, - Listen, $Math$, $$Display-Math$$, etc.">{{ task.description if task else '' }}</textarea>
-
-      <div class="flex items-center justify-between mt-2">
-        <p id="description-hint" class="text-xs text-gray-400">💡 Markdown und LaTeX ($...$) werden unterstützt.</p>
-        <div id="description-preview-anchor"></div>
-      </div>
     </div>
 
     {# Text-Vorlage (task_detail_text.html): Antwort-Gerüst, zwischen
@@ -258,14 +259,15 @@
     <div id="model-solution-editor-container" class="card">
       <h2 class="font-semibold text-gray-800 mb-4">Musterlösung <span class="text-xs text-gray-400">(optional, versteckt für Studenten)</span></h2>
 
+      <div class="flex items-center justify-between mb-2">
+        <p id="model-solution-hint" class="text-xs text-gray-400">💡 Markdown und LaTeX ($...$) werden unterstützt. Beschreibe die Lösung, füge Code-Beispiele und Bewertungskriterien ein.</p>
+        <!-- Edit/Preview-Toggle-Gruppe wird hier von createMdSplitView injiziert -->
+        <div id="solution-preview-anchor" class="flex items-center"></div>
+      </div>
+      <!-- createMdSplitView() baut um die Textarea die Edit/Preview-Split-View (s. markdown-renderer.js) -->
       <textarea id="model-solution-editor" name="model_solution" rows="6"
                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
                 placeholder="Die korrekte Lösung...&#10;&#10;Markdown + LaTeX ($...$) werden unterstützt.">{{ task.model_solution if task and task.model_solution else '' }}</textarea>
-
-      <div class="flex items-center justify-between mt-2">
-        <p id="model-solution-hint" class="text-xs text-gray-400">💡 Markdown und LaTeX ($...$) werden unterstützt. Beschreibe die Lösung, füge Code-Beispiele und Bewertungskriterien ein.</p>
-        <div id="solution-preview-anchor"></div>
-      </div>
     </div>
     {% endif %}
 
@@ -288,12 +290,12 @@
   {# Typspezifisches JS (Blocks aus den Typ-Templates) #}
   {% block type_scripts %}{% endblock %}
 
-  // ─── Initialize Markdown Editors ─────────────────────────
+  // ─── Initialize Markdown Editors (Split-View: Edit/Preview-Toggle) ─
   // Description editor (immer) — bibliography: Ganze Aufgabe → „Quellen“-Liste für @cite:-Zitationen
-  const descEditor = createMarkdownEditor('description-editor-container', { buttonAnchor: 'description-preview-anchor', textareaId: 'description-textarea', startInPreview: true, bibliography: true, onValueChange: () => av.onChange() });
+  const descEditor = createMdSplitView('description-editor-container', { textareaId: 'description-textarea', toggleAnchor: 'description-preview-anchor', storageKey: 'task-desc-panes-h', bibliography: true, onValueChange: () => av.onChange() });
   // Model solution — Markdown Editor (keine MC-Aufgabe → kein Container)
   const solEditor = document.getElementById('model-solution-editor-container')
-    ? createMarkdownEditor('model-solution-editor-container', { buttonAnchor: 'solution-preview-anchor', startInPreview: true, bibliography: true, onValueChange: () => av.onChange() })
+    ? createMdSplitView('model-solution-editor-container', { textareaId: 'model-solution-editor', toggleAnchor: 'solution-preview-anchor', storageKey: 'task-model-solution-panes-h', bibliography: true, onValueChange: () => av.onChange() })
     : null;
 
   // ─── Auto-Save + Versions-History ─────────────────────────
@@ -727,19 +729,13 @@
 
       if (generateFields.description && data.description) {
         descEditor.setValue(data.description);
-        (async () => {
-          await renderMarkdown(data.description, descEditor.previewDiv, { preview: true, bibliography: true });
-          if (!descEditor.isPreview()) descEditor.toggleBtn.click();
-        })();
+        descEditor.refreshPreview();
         populated.push("Aufgabenstellung");
       }
 
       if (generateFields.solution && solEditor && data.model_solution) {
         solEditor.setValue(data.model_solution);
-        (async () => {
-          await renderMarkdown(data.model_solution, solEditor.previewDiv, { preview: true });
-          if (!solEditor.isPreview()) solEditor.toggleBtn.click();
-        })();
+        solEditor.refreshPreview();
         populated.push("Musterlösung");
       }
 
@@ -925,19 +921,11 @@
     setVisibilityToggle(!!p.is_visible);
 
     // Markdown-Editoren (Aufgabenstellung + Musterlösung)
-    const desc = p.description || "";
-    descEditor.setValue(desc);
-    (async () => {
-      await renderMarkdown(desc, descEditor.previewDiv, { preview: true, bibliography: true });
-      if (!descEditor.isPreview()) descEditor.toggleBtn.click();
-    })();
+    descEditor.setValue(p.description || "");
+    descEditor.refreshPreview();
     if (solEditor) {
-      const sol = p.model_solution || "";
-      solEditor.setValue(sol);
-      (async () => {
-        await renderMarkdown(sol, solEditor.previewDiv, { preview: true, bibliography: true });
-        if (!solEditor.isPreview()) solEditor.toggleBtn.click();
-      })();
+      solEditor.setValue(p.model_solution || "");
+      solEditor.refreshPreview();
     }
 
     // Text-Vorlage (Hook im Text-Template)

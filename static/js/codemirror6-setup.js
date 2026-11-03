@@ -830,9 +830,16 @@ class CM6Editor {
     const s = this.view.state;
     const n = Math.max(0, Math.min(line | 0, s.doc.lines - 1));
     const from = s.doc.line(n + 1).from;
+    const scroller = this.view.scrollDOM;
+    if (n === 0) {
+      // Dokumentanfang: direkt ans Scroller-Top — coordsAtPos(0) liefert
+      // außerhalb des Viewports keine verlässlichen Koordinaten.
+      scroller.scrollTop = 0;
+      this.view.dispatch({ selection: { anchor: from } });
+      return;
+    }
     const coords = this.view.coordsAtPos(from);
     if (coords) {
-      const scroller = this.view.scrollDOM;
       // Zeilen-Oberrand ans Scroller-Oberrand: scrollTop = Abstand der
       // Zeile zum Dokumentanfang (beide client-Y-Werte verschieben sich
       // beim Scrollen gemeinsam → Differenz ist scrollunabhängig).

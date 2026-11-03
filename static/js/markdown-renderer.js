@@ -2628,7 +2628,9 @@ function _insertSrcLineMarkers(text, lines, lineOffset, tables) {
   };
   let cursor = 0;
   let line = 0;
-  let lastPos = 0;
+  // -1 (nicht 0): ein Block an Position 0 (erste Zeile) muss ebenfalls
+  // einen Marker bekommen — mit 0 scheitert die Guard "off > lastPos".
+  let lastPos = -1;
   for (const tok of tokens) {
     const raw = tok.raw;
     // Contiguity-Check: fällt er durch, weicht unsere Norm von der
@@ -3799,6 +3801,297 @@ function createMarkdownEditor(containerId, options = {}) {
       else textarea.value = v;
     },
   };
+}
+
+/**
+ * Markdown-Editor als Split-View (aufbauend auf createMarkdownEditor):
+ * Edit/Preview-Toggle (mindestens ein Modus immer aktiv — der letzte
+ * aktive wechselt auf den anderen), Preview oben / Editor unten mit
+ * ziehbarem Trenner, Gesamthöhe per Grip anpassbar (optional in
+ * localStorage gemerkt), Preview-Scroll → Editor-Scroll-Sync und
+ * Doppelklick in der Preview setzt den Editor-Cursor.
+ *
+ * Baut die Pane-Struktur um die Textarea herum (ersetzt sie im DOM)
+ * und injiziert die Toggle-Gruppe an options.toggleAnchor.
+ * Liefert die createMarkdownEditor-API um die Split-View-Steuerung
+ * erweitert (s. unten). CSS: .md-split-* in main.css.
+ */
+function createMdSplitView(containerId, options = {}) {
+  const container = document.getElementById(containerId);
+  if (!container) {
+    console.warn(`createMdSplitView: Container #${containerId} not found`);
+    return null;
+  }
+  const textarea = (options.textareaId
+    ? document.getElementById(options.textareaId)
+    : container.querySelector('textarea'));
+  if (!textarea) {
+    console.warn(`createMdSplitView: No textarea found in #${containerId}`);
+    return null;
+  }
+  const anchor = (typeof options.toggleAnchor === 'string'
+    ? document.getElementById(options.toggleAnchor)
+    : options.toggleAnchor);
+  const minPanesH = options.minPanesH || 200; // passt zu .md-split-panes min-height
+
+  // ── Pane-Struktur um die Textarea bauen (ersetzt sie im DOM) ──
+  const panes = document.createElement('div');
+  panes.className = 'md-split-panes relative flex flex-col border border-gray-200 rounded-lg overflow-hidden bg-white';
+  const previewPane = document.createElement('div');
+  previewPane.className = 'md-split-pane md-split-pane-preview overflow-y-auto p-4 bg-white';
+  const divider = document.createElement('div');
+  divider.className = 'md-split-divider';
+  divider.setAttribute('role', 'separator');
+  divider.title = 'Ziehen: Preview/Editor vergrößern · Doppelklick: Standardgröße';
+  const editorPane = document.createElement('div');
+  editorPane.className = 'md-split-pane overflow-hidden relative';
+  // absolute inset-0: Editor füllt die Pane zuverlässig — height:100%
+  // gegen ein (per flex-grow bestimmtes) Flex-Item ist fragil, absolute
+  // Positionierung immer determiniert.
+  const abs = document.createElement('div');
+  abs.className = 'absolute inset-0';
+  const grip = document.createElement('div');
+  grip.className = 'md-split-grip';
+  grip.setAttribute('role', 'separator');
+  grip.setAttribute('aria-orientation', 'horizontal');
+  grip.title = 'Ziehen: Höhe ändern · Doppelklick: Standardhöhe';
+  grip.innerHTML = '<svg width="10" height="10" viewBox="0 0 10 10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M1.5 8.5 L8.5 1.5 M5.5 8.5 L8.5 5.5"/></svg>';
+  // Textarea in die (noch nicht verlinkten) Panes umziehen, dann Panes an
+  // die alte Textarea-Stelle — replaceWith(panes) geht nicht, weil panes
+  // die Textarea enthält und damit deren Parent (HierarchyRequestError).
+  const taParent = textarea.parentNode;
+  const taNext = textarea.nextSibling;
+  abs.appendChild(textarea);
+  editorPane.appendChild(abs);
+  panes.append(previewPane, divider, editorPane, grip);
+  taParent.insertBefore(panes, taNext);
+  // Fixe Höhen/Rahmen der Textarea verwerfen — die Pane rahmt ein und
+  // liefert die Höhe (CM5 misst bei der Init die Textarea-Höhe ab, wird
+  // unten per 100% ersetzt; Textarea-Fallback füllt per h-full).
+  textarea.className = 'w-full h-full text-sm focus:outline-none focus:ring-2 focus:ring-blue-500';
+
+  // ── Toggle-Gruppe (mindestens ein Modus immer aktiv) ──
+  const group = document.createElement('div');
+  group.className = 'flex items-center rounded-lg border border-gray-300 overflow-hidden';
+  group.setAttribute('role', 'group');
+  group.setAttribute('aria-label', 'Edit/Preview');
+  const editBtn = document.createElement('button');
+  editBtn.type = 'button';
+  editBtn.className = 'md-split-btn text-sm px-3 py-1.5 transition inline-flex items-center gap-1.5';
+  editBtn.title = 'Markdown-Editor anzeigen/ausblenden';
+  editBtn.innerHTML = '✏️ Edit';
+  const prevBtn = document.createElement('button');
+  prevBtn.type = 'button';
+  prevBtn.className = 'md-split-btn border-l border-gray-300 text-sm px-3 py-1.5 transition inline-flex items-center gap-1.5';
+  prevBtn.title = 'Live-Vorschau anzeigen/ausblenden';
+  prevBtn.innerHTML = '👁️ Preview';
+  group.append(editBtn, prevBtn);
+  if (anchor) {
+    anchor.appendChild(group);
+  } else {
+    group.style.marginBottom = '0.5rem';
+    panes.insertAdjacentElement('beforebegin', group);
+  }
+
+  // ── Editor: diese Panes steuern den Modus (externalToggle) und die
+  //    Preview hält sich live (sourceLines → Scroll-Sync/Doppelklick) ──
+  const editor = createMarkdownEditor(containerId, Object.assign({}, options, {
+    externalToggle: true,
+    livePreview: true,
+  }));
+  if (!editor) return null;
+  // Preview in die obere Pane (die Pane liefert Rahmen/Scroll); der
+  // Editor füllt die untere.
+  previewPane.appendChild(editor.previewDiv);
+  editor.previewDiv.className = 'markdown-preview-area';
+  const editorEl = editor.cm ? editor.cm.getWrapperElement() : editor.textarea;
+  editorEl.style.height = '100%';
+
+  // ── Modus-Logik: letzter aktiver Modus wechselt auf den anderen ──
+  const modes = { edit: true, preview: true };
+  let prevShown = false;
+  function apply() {
+    // Einzelmodus: Editor-Pane füllt die Fläche wieder komplett —
+    // ggf. von einem Split-Drag gesetzte Fixhöhe entfernen
+    if (modes.edit !== modes.preview) {
+      editorPane.style.height = '';
+      editorPane.style.flex = '';
+    }
+    editorPane.classList.toggle('hidden', !modes.edit);
+    previewPane.classList.toggle('hidden', !modes.preview);
+    divider.classList.toggle('hidden', !(modes.edit && modes.preview));
+    editBtn.classList.toggle('md-split-active', modes.edit);
+    prevBtn.classList.toggle('md-split-active', modes.preview);
+    if (modes.edit && editor.cm) editor.cm.refresh();
+    // Beim (Wieder-)Einblenden neu rendern — livePreview überspringt
+    // verdeckte Previews, das ist der einzige Refresh-Pfad
+    if (modes.preview && !prevShown) editor.renderPreview();
+    prevShown = modes.preview;
+  }
+  function toggle(which) {
+    const other = which === 'edit' ? 'preview' : 'edit';
+    if (modes[which] && !modes[other]) {
+      modes[which] = false;
+      modes[other] = true;
+    } else {
+      modes[which] = !modes[which];
+    }
+    apply();
+  }
+  editBtn.addEventListener('click', () => toggle('edit'));
+  prevBtn.addEventListener('click', () => toggle('preview'));
+
+  // ── Trenner: Drag = Höhe der unteren (Editor-)Pane, Doppelklick = Reset ──
+  const SPLIT_MIN = 120;
+  divider.addEventListener('mousedown', (e) => e.preventDefault()); // kein Text-Caret
+  divider.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    const startY = e.clientY;
+    const startH = editorPane.getBoundingClientRect().height;
+    const maxH = () => panes.clientHeight - SPLIT_MIN;
+    let raf = 0;
+    const onMove = (ev) => {
+      const size = Math.max(SPLIT_MIN, Math.min(startH + (startY - ev.clientY), maxH()));
+      editorPane.style.height = size + 'px';
+      editorPane.style.flex = 'none';
+      if (!raf) raf = requestAnimationFrame(() => { raf = 0; if (editor.cm) editor.cm.refresh(); });
+    };
+    const onUp = () => {
+      divider.removeEventListener('pointermove', onMove);
+      divider.removeEventListener('pointerup', onUp);
+      divider.removeEventListener('pointercancel', onUp);
+      divider.classList.remove('md-split-dragging');
+      document.body.classList.remove('md-split-drag');
+      if (editor.cm) editor.cm.refresh();
+    };
+    divider.setPointerCapture(e.pointerId);
+    divider.classList.add('md-split-dragging');
+    document.body.classList.add('md-split-drag');
+    divider.addEventListener('pointermove', onMove);
+    divider.addEventListener('pointerup', onUp);
+    divider.addEventListener('pointercancel', onUp);
+  });
+  divider.addEventListener('dblclick', () => {
+    editorPane.style.height = '';
+    editorPane.style.flex = '';
+    if (editor.cm) editor.cm.refresh();
+  });
+  // Fixe Editor-Höhe (nach Split-Drag) in die verfügbare Pane-Höhe
+  // klemmen (Fensterwechsel / Pane-Resize).
+  const clampEditorPane = () => {
+    if (!editorPane.style.height || !panes.isConnected) return;
+    const clamped = Math.max(SPLIT_MIN, Math.min(parseFloat(editorPane.style.height) || 0, panes.clientHeight - SPLIT_MIN));
+    if (clamped !== parseFloat(editorPane.style.height)) editorPane.style.height = clamped + 'px';
+  };
+  window.addEventListener('resize', clampEditorPane);
+
+  // ── Gesamthöhe per Ziehhgriff unten rechts (Höhe optional pro
+  //    Instanz merken) — eigener Drag (Pointer Events + Capture) statt
+  //    CSS resize:vertical, s. main.css ──
+  if (options.storageKey) {
+    const stored = localStorage.getItem(options.storageKey);
+    if (stored) panes.style.height = stored + 'px';
+  }
+  grip.addEventListener('pointerdown', (e) => {
+    e.preventDefault();
+    grip.setPointerCapture(e.pointerId);
+    const startY = e.clientY;
+    const startH = panes.offsetHeight;
+    grip.classList.add('md-split-grip-dragging');
+    const onMove = (ev) => {
+      panes.style.height = Math.max(minPanesH, startH + (ev.clientY - startY)) + 'px';
+      clampEditorPane();
+    };
+    const onUp = () => {
+      grip.removeEventListener('pointermove', onMove);
+      grip.removeEventListener('pointerup', onUp);
+      grip.removeEventListener('pointercancel', onUp);
+      grip.classList.remove('md-split-grip-dragging');
+      if (options.storageKey) localStorage.setItem(options.storageKey, String(panes.offsetHeight));
+    };
+    grip.addEventListener('pointermove', onMove);
+    grip.addEventListener('pointerup', onUp);
+    grip.addEventListener('pointercancel', onUp);
+  });
+  grip.addEventListener('dblclick', () => {
+    panes.style.height = '';
+    if (options.storageKey) localStorage.removeItem(options.storageKey);
+    clampEditorPane();
+  });
+
+  // ── Preview-Scroll → Editor: das oberste sichtbare Preview-Block
+  //    (data-src-line aus dem sourceLines-Render) bestimmt die
+  //    Editor-Zeile. Nur Preview→Editor (kein Rückkopplungslauf). ──
+  let syncRaf = 0;
+  previewPane.addEventListener('scroll', () => {
+    if (syncRaf) return;
+    syncRaf = requestAnimationFrame(() => {
+      syncRaf = 0;
+      if (!modes.preview || !editor.cm) return;
+      const wrap = previewPane.querySelector('.markdown-preview');
+      if (!wrap) return;
+      // Lead: der Editor springt schon ~15 px vorher an die nächste
+      // Zeile — nicht erst, wenn der Block die Pane-Kante erreicht.
+      const top = previewPane.getBoundingClientRect().top + 2 + 15;
+      const els = wrap.querySelectorAll('[data-src-line]');
+      // data-src-line-Elemente in Dokumentenreihenfolge (inkl. Box-Bodies):
+      // letztes mit top ≤ Pane-Kante = oberstes sichtbares Block-Element.
+      let line = -1, lastIdx = -1;
+      for (let i = 0; i < els.length; i++) {
+        if (els[i].getBoundingClientRect().top <= top) { line = +els[i].dataset.srcLine; lastIdx = i; }
+        else break;
+      }
+      // Oberstes sichtbares Block ist das erste → Editor ganz nach oben
+      // (L1): unsichtbare Zeilen am Dokumentanfang (z. B. {#sec:}-Labels)
+      // dürfen den Editor nicht davon abhalten, den Anfang zu erreichen.
+      if (lastIdx === 0) line = 0;
+      if (line >= 0) editor.cm.scrollToLineTop(Math.min(line, editor.cm.lastLine()));
+    });
+  });
+
+  // ── Doppelklick in der Preview: Editor-Cursor auf den passenden Block
+  //    (blockgenaue Auflösung wie die Scroll-Sync, via data-src-line) und
+  //    Editor fokussieren. Nur wenn der Editor sichtbar ist; ohne Marker
+  //    bleibt das normale Wort-Selektions-Verhalten erhalten. ──
+  previewPane.addEventListener('dblclick', (e) => {
+    if (!modes.edit || !editor.cm) return;
+    const el = e.target.closest('[data-src-line]');
+    if (!el) return;
+    e.preventDefault();
+    // Zeilengenaue Auflösung: letzter data-src-line-Anteil an/unter der
+    // Klickposition (mehrzeilige Absätze/Listen-Items tragen inline
+    // Zeilen-Marker; ein Klick links VOR dem Marker auf derselben
+    // visuellen Zeile zählt noch zur vorherigen Line).
+    let line = +el.dataset.srcLine;
+    for (const m of el.querySelectorAll('[data-src-line]')) {
+      const r = m.getBoundingClientRect();
+      if (e.clientY < r.top || (e.clientY < r.bottom && e.clientX < r.left)) break;
+      line = +m.dataset.srcLine;
+    }
+    // Gleiche Regel wie die Scroll-Sync: erster Block → Editor ganz oben.
+    const wrap = previewPane.querySelector('.markdown-preview');
+    if (wrap && el === wrap.querySelector('[data-src-line]')) line = 0;
+    editor.cm.scrollToLineTop(line);
+    editor.cm.focus();
+  });
+
+  apply();
+
+  return Object.assign({}, editor, {
+    modes,
+    applyModes: apply,
+    toggleMode: toggle,
+    // Editor sicher sichtbar, ohne die Preview abzuschalten (z. B. vor
+    // dem LaTeX-Einfügen)
+    ensureEdit() { if (!modes.edit) { modes.edit = true; apply(); } },
+    // Preview sicher sichtbar + sofort gerendert (AI-Generierung/Restore);
+    // war sie bereits an, renderPreview ohne das livePreview-Debounce
+    refreshPreview() {
+      if (!modes.preview) { modes.preview = true; apply(); }
+      else editor.renderPreview();
+    },
+    panes, previewPane, editorPane, divider, grip, toggleGroup: group,
+  });
 }
 
 // ─── Xref-Hover-Previews (data-xref-tip) ────────────────────────────────

@@ -22,13 +22,14 @@
           {% if task.text_template %}
           <p class="text-xs text-gray-500 mb-2">💡 Bitte trage deine Lösung direkt in die vorgegebene Vorlage ein (z. B. Lücken/Tabelle).</p>
           {% endif %}
+          <!-- createMdSplitView() baut um die Textarea die Edit/Preview-Split-View
+               (Toggle, Panes mit Trenner, Höhen-Grip, Scroll-Sync; s. markdown-renderer.js) -->
           <textarea id="text-solution"
-                    class="w-full h-64 border border-gray-300 rounded-lg p-3 text-sm focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
+                    class="w-full text-sm"
                     placeholder="Schreibe hier deine Lösung...&#10;&#10;Du kannst Markdown verwenden: **fett**, *kursiv*, - Listen, $Math$, $$Display-Math$$">{% if draft_solution is not none %}{{ draft_solution }}{% else %}{{ task.text_template or '' }}{% endif %}</textarea>
-
-          <!-- Unified toolbar: Preview + LaTeX-Upload -->
+          <!-- Unified toolbar unter dem Editor: Edit/Preview (von
+               createMdSplitView injiziert) + Foto/Zeichnen-Toggle -->
           <div id="text-editor-toolbar" class="flex items-center gap-2 mt-2">
-            <!-- Preview button injected by createMarkdownEditor (anchor: text-editor-toolbar) -->
             <!-- Toggle buttons: Foto / Zeichnen -->
             <div id="latex-toggle-group" class="flex items-center rounded-lg border border-gray-300 overflow-hidden">
               <button id="latex-toggle-photo" type="button"
@@ -748,7 +749,7 @@
       if (cm) {
         // CodeMirror aktiv: an der Cursor-Position einfügen; das Change-
         // Event aktualisiert die Live-Preview automatisch.
-        if (ed.isPreview()) ed.toggleBtn.click(); // in den Edit-Modus zurück
+        ed.ensureEdit(); // Editor sicher sichtbar (Split-View)
         const pos = cm.getCursor();
         const before = cm.getValue().slice(0, cm.indexFromPos(pos));
         const prefix = (before.length > 0 && !before.endsWith("\n")) ? "\n" : "";

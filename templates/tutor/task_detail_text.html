@@ -8,23 +8,25 @@
         Startinhalt der Studierenden-Antwort, z. B. Lückentext (Lücken klar markieren) oder Markdown-Tabelle mit leeren Zellen.
         Leer lassen, wenn die Aufgabe eine freie Textantwort haben soll.
       </p>
+      <div class="flex items-center justify-between mb-2">
+        <p id="text-template-hint" class="text-xs text-gray-400">💡 Markdown und LaTeX ($...$) werden unterstützt.</p>
+        <!-- Edit/Preview-Toggle-Gruppe wird hier von createMdSplitView injiziert -->
+        <div id="text-template-preview-anchor" class="flex items-center"></div>
+      </div>
+      <!-- createMdSplitView() baut um die Textarea die Edit/Preview-Split-View (s. markdown-renderer.js) -->
       <textarea id="text-template-editor" name="text_template" rows="8"
                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
                 placeholder="| Größe | Wert |&#10;|---|---|&#10;| a |    |&#10;| b |    |&#10;&#10;Oder Lückentext: … ist {________} …">{{ task.text_template or '' }}</textarea>
-
-      <div class="flex items-center justify-between mt-2">
-        <p id="text-template-hint" class="text-xs text-gray-400">💡 Markdown und LaTeX ($...$) werden unterstützt.</p>
-        <div id="text-template-preview-anchor"></div>
-      </div>
     </div>
 {% endblock %}
 
 {% block type_scripts %}
   // Text-Vorlage: Markdown-Editor + Hooks für die Base
   // (buildTaskBody / applyPayload / AI-Generierung lesen die Hooks).
-  window._textTemplateEditor = createMarkdownEditor('text-template-section', {
-    buttonAnchor: 'text-template-preview-anchor',
-    startInPreview: true,
+  window._textTemplateEditor = createMdSplitView('text-template-section', {
+    textareaId: 'text-template-editor',
+    toggleAnchor: 'text-template-preview-anchor',
+    storageKey: 'task-text-template-panes-h',
     bibliography: true,
     onValueChange: () => av.onChange(),
   });
