@@ -50,7 +50,7 @@
      der Seite, der Edit/Preview-Toggle bleibt immer in Reichweite.
      Beide Modi aktiv → Preview oben, Editor unten, dazwischen der
      ziehbare Trenner wie im Code-Task-Workspace. */
-  .sq-e-panes { height: calc(100vh - 200px); min-height: 380px; }
+  .sq-e-panes { height: calc(100vh - 200px); min-height: 200px; }
   /* Höhen-Grip unten rechts (eigener Drag, s. sqeInitContent) — CSS
      resize:vertical geht nicht: der native Grip wird vom Browser gedraggt
      und scrollt die Seite mit, sobald der Griff das Viewport verlässt.
@@ -527,7 +527,7 @@
     if (storedPanesH) panes.style.height = storedPanesH + 'px';
     const resizeGrip = document.getElementById('sqe-resize-' + key);
     if (resizeGrip) {
-      const PANE_MIN = 380; // passt zu .sq-e-panes min-height
+      const PANE_MIN = 200; // passt zu .sq-e-panes min-height
       resizeGrip.addEventListener('pointerdown', (e) => {
         e.preventDefault();
         resizeGrip.setPointerCapture(e.pointerId);

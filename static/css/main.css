@@ -897,38 +897,54 @@
   white-space: pre;
 }
 
-/* Skript-Edit-Modus: die Preview-Pane scrollt mit derselben Scrollbar wie
-   der Editor (.cm-scroller) — gleiche Werte, aber eigene Regel, denn die
-   Gruppe oben enthält <pre>-spezifische Properties (white-space, overflow-x),
-   die für die Pane nicht gelten. */
-.sq-e-pane-preview {
-  scrollbar-color: #555c69 transparent;
-  scrollbar-width: thin;
-}
-
 .cm-scroller::-webkit-scrollbar,
-.markdown-preview pre::-webkit-scrollbar,
-.sq-e-pane-preview::-webkit-scrollbar {
+.markdown-preview pre::-webkit-scrollbar {
   width: 8px;
   height: 8px;
   background: transparent;
 }
 
 .cm-scroller::-webkit-scrollbar-thumb,
-.markdown-preview pre::-webkit-scrollbar-thumb,
-.sq-e-pane-preview::-webkit-scrollbar-thumb {
+.markdown-preview pre::-webkit-scrollbar-thumb {
   background-color: #555c69;
   border-radius: 4px;
 }
 
 .cm-scroller::-webkit-scrollbar-thumb:hover,
-.markdown-preview pre::-webkit-scrollbar-thumb:hover,
-.sq-e-pane-preview::-webkit-scrollbar-thumb:hover {
+.markdown-preview pre::-webkit-scrollbar-thumb:hover {
   background-color: #6b7280;
 }
 
 .cm-scroller::-webkit-scrollbar-track,
 .markdown-preview pre::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+/* Skript-Edit-Modus: die Scrollbars von Preview-Pane und Editor wie die
+   Eingabefelder (Forum/Fragen) — dezent hell auf hellem Grund. Eigene
+   Gruppe, weil .cm-scroller sonst die Code-Oberfläche-Regel oben erbt. */
+.sq-e-pane-preview,
+.sq-e-panes .cm-scroller {
+  scrollbar-color: #cbd5e1 transparent;
+  scrollbar-width: thin;
+}
+.sq-e-pane-preview::-webkit-scrollbar,
+.sq-e-panes .cm-scroller::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+  background: transparent;
+}
+.sq-e-pane-preview::-webkit-scrollbar-thumb,
+.sq-e-panes .cm-scroller::-webkit-scrollbar-thumb {
+  background-color: #cbd5e1;
+  border-radius: 4px;
+}
+.sq-e-pane-preview::-webkit-scrollbar-thumb:hover,
+.sq-e-panes .cm-scroller::-webkit-scrollbar-thumb:hover {
+  background-color: #94a3b8;
+}
+.sq-e-pane-preview::-webkit-scrollbar-track,
+.sq-e-panes .cm-scroller::-webkit-scrollbar-track {
   background: transparent;
 }
 
