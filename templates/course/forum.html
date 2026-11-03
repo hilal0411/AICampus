@@ -9,6 +9,21 @@
    alle 4 s: GET /api/courses/{id}/forum/channels/{cid}/messages?after_id=…
    ───────────────────────────────────────────────────────────────────── #}
 
+{# Glocke wie in der Navbar (base.html): gestrichen (bell-off) wenn gemutet.
+   Beide SVGs immer im DOM — Mute-Toggle zeigt/hidet per 'hidden'. #}
+{% macro bell_icon(muted) -%}
+  <svg class="bell-on w-4 h-4 shrink-0 {% if muted %}hidden{% endif %}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M18 8a6 6 0 00-12 0c0 7-3 9-3 9h18s-3-2-3-9"/>
+    <path d="M13.73 21a2 2 0 01-3.46 0"/>
+  </svg>
+  <svg class="bell-off w-4 h-4 shrink-0 {% if not muted %}hidden{% endif %}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    <path d="M8.7 3A6 6 0 0 1 18 8a21.3 21.3 0 0 0 .6 5"/>
+    <path d="M17 17H3s3-2 3-9a4.67 4.67 0 0 1 .3-1.7"/>
+    <path d="M13.73 21a2 2 0 0 1-3.46 0"/>
+    <line x1="2" x2="22" y1="2" y2="22"/>
+  </svg>
+{%- endmacro %}
+
 {% block course_content %}
 <div class="flex gap-4" style="height: calc(100vh - 300px); min-height: 420px;">
 
@@ -51,8 +66,8 @@
         </a>
         <button type="button" class="forum-channel-mute w-5 h-5 shrink-0 flex items-center justify-center rounded text-xs text-gray-400 hover:bg-gray-200/60 transition"
                 data-channel-id="{{ ch.id }}"
-                title="{{ 'Kanal unmuten (wieder Benachrichtigungen erhalten)' if ch.muted else 'Kanal muten (keine Benachrichtigungen mehr)' }}">
-          {{ '🔕' if ch.muted else '🔔' }}
+                 title="{{ 'Kanal unmuten (wieder Benachrichtigungen erhalten)' if ch.muted else 'Kanal muten (keine Benachrichtigungen mehr)' }}">
+          {{ bell_icon(ch.muted) }}
         </button>
       </div>
       {% endfor %}
@@ -90,10 +105,10 @@
       {% if active_channel.description %}<span class="text-xs text-gray-500 truncate">— {{ active_channel.description }}</span>{% endif %}
       <span class="flex-1"></span>
       {# Mute-Toggle (alle Mitglieder; auf Mobil die einzige Stelle, da Sidebar verborgen) #}
-      <button type="button" class="forum-channel-mute-head px-2 py-1 rounded text-gray-400 hover:bg-gray-100 hover:text-gray-700 text-sm transition shrink-0"
+      <button type="button" class="forum-channel-mute-head inline-flex items-center justify-center px-2 py-1 rounded text-gray-400 hover:bg-gray-100 hover:text-gray-700 transition shrink-0"
               data-channel-id="{{ active_channel.id }}"
               title="{{ 'Kanal unmuten (wieder Benachrichtigungen erhalten)' if active_channel.muted else 'Kanal muten (keine Benachrichtigungen mehr)' }}">
-        {{ '🔕' if active_channel.muted else '🔔' }}
+        {{ bell_icon(active_channel.muted) }}
       </button>
       {% if active_channel.can_manage %}
       <button type="button" class="channel-manage px-2 py-1 rounded text-gray-400 hover:bg-gray-100 hover:text-gray-700 text-sm transition" data-action="rename" title="Kanal umbenennen">✎</button>
@@ -116,7 +131,7 @@
         id="forum-input"
         rows="1"
         maxlength="5000"
-        placeholder="Nachricht schreiben… (Markdown & LaTeX)"
+        placeholder="Nachricht (Markdown)"
         class="flex-1 border border-gray-300 rounded-lg px-4 py-2.5 text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
       ></textarea>
       <button
@@ -556,7 +571,8 @@
     document
       .querySelectorAll(`.forum-channel-mute[data-channel-id="${channelId}"], .forum-channel-mute-head[data-channel-id="${channelId}"]`)
       .forEach((b) => {
-        b.textContent = nowMuted ? '🔕' : '🔔';
+        b.querySelector('.bell-on')?.classList.toggle('hidden', nowMuted);
+        b.querySelector('.bell-off')?.classList.toggle('hidden', !nowMuted);
         b.title = nowMuted ? 'Kanal unmuten (wieder Benachrichtigungen erhalten)' : 'Kanal muten (keine Benachrichtigungen mehr)';
       });
   }
