@@ -227,14 +227,14 @@
       }
 
       const typeBadge = task.task_type === 'workspace'
-        ? '<span class="px-2 py-0.5 rounded text-xs font-medium bg-indigo-100 text-indigo-700">💻 Workspace</span>'
+        ? '<span class="whitespace-nowrap px-2 py-0.5 rounded text-xs font-medium bg-indigo-100 text-indigo-700">💻 Workspace</span>'
         : task.task_type === 'mc'
-        ? '<span class="px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-700">🎯 Multiple Choice</span>'
+        ? '<span class="whitespace-nowrap px-2 py-0.5 rounded text-xs font-medium bg-emerald-100 text-emerald-700">🎯 Multiple Choice</span>'
         : task.task_type === 'upload'
-        ? '<span class="px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">📤 Upload</span>'
+        ? '<span class="whitespace-nowrap px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700">📤 Upload</span>'
         : task.task_type === 'extern'
-        ? '<span class="px-2 py-0.5 rounded text-xs font-medium bg-rose-100 text-rose-700">🔗 Extern</span>'
-        : '<span class="px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">📄 Text</span>';
+        ? '<span class="whitespace-nowrap px-2 py-0.5 rounded text-xs font-medium bg-rose-100 text-rose-700">🔗 Extern</span>'
+        : '<span class="whitespace-nowrap px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600">📄 Text</span>';
 
       let medalBadge = '';
       if (pct >= 1.0) medalBadge = '<span class="badge-tier badge-platinum">💎</span>';
@@ -244,8 +244,10 @@
 
       let deadlineHtml = '';
       if (task.deadline) {
-        const dl = new Date(task.deadline).toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
-        deadlineHtml = ` · ⏰ Deadline ${dl}`;
+        const dlDate = new Date(task.deadline);
+        const dl = dlDate.toLocaleString('de-DE', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+        const dlCls = dlDate.getTime() < Date.now() ? ' class="line-through text-gray-400"' : '';
+        deadlineHtml = ` · ⏰ <span${dlCls}>Deadline ${dl}</span>`;
       }
 
       html += `

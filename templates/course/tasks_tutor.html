@@ -67,8 +67,8 @@
           <div class="text-sm text-gray-500 mt-1">
             {{ task.max_points }} Punkte
             {% if task.max_attempts is not none %}· {{ task.max_attempts }} Versuche{% endif %}
-            {% if task.deadline %}· ⏰ <span data-ts="{{ deadline_iso(task.deadline) }}"></span>{% endif %}
-            <span class="px-2 py-0.5 rounded text-xs font-medium
+            {% if task.deadline %}· <span class="{{ 'line-through text-gray-400' if deadline_expired(task.deadline) else '' }}">⏰ <span data-ts="{{ deadline_iso(task.deadline) }}"></span></span>{% endif %}
+            <span class="whitespace-nowrap px-2 py-0.5 rounded text-xs font-medium
               {% if task.task_type == 'workspace' %}bg-indigo-100 text-indigo-700
               {% elif task.task_type == 'mc' %}bg-emerald-100 text-emerald-700
               {% elif task.task_type == 'upload' %}bg-amber-100 text-amber-700
