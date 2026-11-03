@@ -2588,18 +2588,47 @@ async function renderMarkdown(text, targetElement, options = {}) {
 // Normalisierung wie marked (_Lexer.lex: \r\n|\r→\n; blockTokens: Leading-Tabs
 // → 4 Spaces); Norm-Zeile k = Originalzeile k (die Normalisierung ändert
 // keine Zeilenzahl). Marker = <div> auf eigener Zeile (1. Zeile endet mit
-// ">" + Zeilenumbruch → marked-HTML-Block), vom Folgeblock durch Leerzeile
-// getrennt. → _applySrcLineMarkers am Ende.
+// "\u003e" + Zeilenumbruch → marked-HTML-Block), vom Folgeblock durch Leerzeile
+// getrennt. Fortsetzungszeilen mehrzeiliger Absätze (Listen-Items,
+// normale Absätze) erhalten zusätzlich ein leeres Inline-Span (sq-subline):
+// der Block-Marker deckt nur die erste Blockzeile ab. →
+// _applySrcLineMarkers am Ende.
 function _insertSrcLineMarkers(text, lines, lineOffset, tables) {
   const tokens = marked.lexer(text, { breaks: false, gfm: true });
   const norm = text.replace(/\r\n|\r/g, '\n')
                    .replace(/^( *)(\t+)/gm, (m, l, t) => l + '    '.repeat(t.length));
   const lineOff = [0];
   for (let i = 0; i < norm.length; i++) if (norm[i] === '\n') lineOff.push(i + 1);
-  let out = '';
-  let last = 0;   // Ende des letzten kopierten Abschnitts (norm)
-  let cursor = 0; // Token-Anfang in norm (Tokens lückenlos → strikt monoton)
-  let line = 0;   // Norm-Zeilennummer von cursor
+  const subLine = (l) => (lines[l] != null ? lines[l] : 0) + lineOffset;
+  const lineAt = (pos) => {
+    let l = 0;
+    while (lineOff[l + 1] !== undefined && lineOff[l + 1] <= pos) l++;
+    return l;
+  };
+  // Pass 1: Marker-Positionen sammeln — Block-Marker (erste Zeile je
+  // Block) + Zeilen-Marker (Fortsetzungszeilen mehrzeiliger Absätze,
+  // z. B. Listen-Item über zwei Source-Zeilen): ohne sie erreichte
+  // Doppelklick/Scroll-Sync nur die erste Zeile des Blocks.
+  const marks = []; // { pos, html }
+  const addLineMarks = (start, end, firstLine) => {
+    for (let j = firstLine + 1; j <= lineAt(end - 1); j++) {
+      let p = lineOff[j];
+      const e2 = lineOff[j + 1] !== undefined && lineOff[j + 1] <= end
+        ? lineOff[j + 1] - 1 : end;
+      while (p < e2 && norm[p] === ' ') p++; // Einzug bleibt vor dem Marker
+      if (p < e2) marks.push({
+        pos: p,
+        // Leeres, zero-width Span (Content NICHT einpacken: marked parst
+        // Markdown nicht innerhalb von Inline-HTML → **fett** bräche
+        // kaputt). Top = Position der Zeile; für die Scroll-Sync reicht
+        // das. _applySrcLineMarkers setzt data-src-line auf der DOM.
+        html: `\u003cspan class="sq-subline" data-line="${subLine(j)}"\u003e\u003c/span\u003e`,
+      });
+    }
+  };
+  let cursor = 0;
+  let line = 0;
+  let lastPos = 0;
   for (const tok of tokens) {
     const raw = tok.raw;
     // Contiguity-Check: fällt er durch, weicht unsere Norm von der
@@ -2608,15 +2637,14 @@ function _insertSrcLineMarkers(text, lines, lineOffset, tables) {
     if (tok.type !== 'space') {
       while (lineOff[line + 1] !== undefined && lineOff[line + 1] <= cursor) line++;
       const off = lineOff[line];
-      if (off > last) {
-        const n = (lines[line] != null ? lines[line] : 0) + lineOffset;
+      if (off > lastPos) {
+        const n = subLine(line);
         // Feinere Zeilen innerhalb eines Blocks (data-sub): marked lext
         // eine ganze Liste/Tabelle als EINEN Token — ohne Sub-Zeilen
         // träfen Doppelklick/Scroll-Sync immer nur die Block-Anfangs-
         // zeile. Format "l1,l2,..." (gleiche Nummerierung wie data-line);
-        // _applySrcLineMarkers verteilt sie auf <li> bzw. <tr>.
+        // _applySrcLineMarkers verteilt sie auf \u003cli\u003e bzw. \u003ctr\u003e.
         let sub = '';
-        const subLine = (l) => (lines[l] != null ? lines[l] : 0) + lineOffset;
         if (tok.type === 'list' && tok.items && tok.items.length) {
           // Item-Raws kacheln list.raw lückenlos (nur das letzte Item
           // ist trimEnd'ed — seine Startposition bleibt exakt) →
@@ -2624,9 +2652,16 @@ function _insertSrcLineMarkers(text, lines, lineOffset, tables) {
           const parts = [];
           let o = cursor;
           for (const it of tok.items) {
-            let l = line;
-            while (lineOff[l + 1] !== undefined && lineOff[l + 1] <= o) l++;
+            const l = lineAt(o);
             parts.push(subLine(l));
+            // Mehrzeiliges Item (reiner Ein-Absatz) → Fortsetzungszeilen
+            // adressierbar. Items mit eingebetteten Blöcken (verschachtelte
+            // Listen, Code …) bleiben unmarkiert — erste Zeile gilt.
+            // (marked: Item-Content ist Token-Typ "text", kein "paragraph".)
+            if (it.tokens && it.tokens.length === 1 &&
+                (it.tokens[0].type === 'text' || it.tokens[0].type === 'paragraph')) {
+              addLineMarks(o, o + it.raw.length, l);
+            }
             o += it.raw.length;
           }
           sub = parts.join(',');
@@ -2645,20 +2680,35 @@ function _insertSrcLineMarkers(text, lines, lineOffset, tables) {
           const tbl = t && tables[t[1]];
           if (tbl && tbl.rows && tbl.rows.length) {
             // sub-Format wie beim nativen table-Token: [Kopf, Daten…] —
-            // die Trennzeile (Index 1) hat kein <tr> → weglassen.
+            // die Trennzeile (Index 1) hat kein \u003ctr\u003e → weglassen.
             const parts = [tbl.rows[0]];
             for (let i = 2; i < tbl.rows.length; i++) parts.push(tbl.rows[i]);
             sub = parts.map((r) => r + lineOffset).join(',');
           }
+        } else if (tok.type === 'paragraph') {
+          // Mehrzeiliger Absatz → Fortsetzungszeilen adressierbar
+          // (wie bei Listen-Items).
+          addLineMarks(cursor, cursor + raw.length, line);
         }
-        out += norm.slice(last, off) +
-          `<div class="sq-slm" data-line="${n}"${sub ? ` data-sub="${sub}"` : ''}>\n</div>\n\n`;
-        last = off;
+        marks.push({
+          pos: off,
+          html: `\u003cdiv class="sq-slm" data-line="${n}"${sub ? ` data-sub="${sub}"` : ''}\u003e\n\u003c/div\u003e\n\n`,
+        });
+        lastPos = off;
       }
     }
     cursor += raw.length;
   }
-  return out + norm.slice(last);
+  marks.sort((a, b) => a.pos - b.pos);
+  // Pass 2: norm kopieren und Marker an den Positionen einfügen.
+  let out = '';
+  let i = 0;
+  for (const mk of marks) {
+    if (mk.pos < i) return text; // defensiv: Reihenfolge kaputt → ohne Marker
+    out += norm.slice(i, mk.pos) + mk.html;
+    i = mk.pos;
+  }
+  return out + norm.slice(i);
 }
 
 // (sourceLines) Marker → data-src-line: jeder Marker liegt direkt vor dem
@@ -2702,6 +2752,14 @@ function _applySrcLineMarkers(root) {
       }
     }
     m.remove();
+  }
+  // Zeilen-Marker (Fortsetzungszeilen mehrzeiliger Absätze/Listen-Items):
+  // leeres Span bleibt als Inline-Ziel für die Scroll-Sync (Top =
+  // Position der Zeile).
+  for (const s of root.querySelectorAll('.sq-subline')) {
+    s.dataset.srcLine = s.dataset.line;
+    s.removeAttribute('data-line');
+    s.classList.remove('sq-subline');
   }
 }
 

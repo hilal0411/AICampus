@@ -56,9 +56,9 @@
      und scrollt die Seite mit, sobald der Griff das Viewport verlässt.
      Höhe pro Kapitel merken (localStorage). Look wie nativer Resize-Grip. */
   .sq-e-resize {
-    position: absolute; right: 3px; bottom: 3px; width: 16px; height: 16px;
+    position: absolute; right: 8px; bottom: 0px; width: 16px; height: 16px;
     display: flex; align-items: center; justify-content: center;
-    color: #9ca3af; cursor: nwse-resize; touch-action: none; z-index: 5;
+    color: #9ca3af; cursor: ns-resize; touch-action: none; z-index: 5;
     opacity: 0.6; transition: opacity 0.15s, color 0.15s;
   }
   .sq-e-resize:hover, .sq-e-resize.sqe-resize-dragging { opacity: 1; color: #4f46e5; }
@@ -595,7 +595,17 @@
       const el = e.target.closest('[data-src-line]');
       if (!el) return;
       e.preventDefault();
-      contentEditor.cm.scrollToLineTop(+el.dataset.srcLine);
+      // Zeilengenaue Auflösung: letzter data-src-line-Anteil an/unter der
+      // Klickposition (mehrzeilige Absätze/Listen-Items tragen inline
+      // Zeilen-Marker; ein Klick links VOR dem Marker auf derselben
+      // visuellen Zeile zählt noch zur vorherigen Line).
+      let line = +el.dataset.srcLine;
+      for (const m of el.querySelectorAll('[data-src-line]')) {
+        const r = m.getBoundingClientRect();
+        if (e.clientY < r.top || (e.clientY < r.bottom && e.clientX < r.left)) break;
+        line = +m.dataset.srcLine;
+      }
+      contentEditor.cm.scrollToLineTop(line);
       contentEditor.cm.focus();
     });
 
