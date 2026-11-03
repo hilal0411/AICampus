@@ -1604,9 +1604,12 @@ async function renderMarkdown(text, targetElement, options = {}) {
   let tabFallbackCount = 0;
   // Slide-Decks: slide-eigene Tabellen-Labels → S1, S2, … (wie eq/fig/code).
   let slideTabCount = 0;
+  // Regex-Ende als Lookahead (kein \n-Konsum!): würde der Match das \n der
+  // Label-Zeile fressen, merged die nächste Zeile mit der Placeholder-Zeile
+  // und lines[] behält eine tote Entry → alle folgenden Zeilen um 1 falsch.
   processed = _trackedReplace(processed, lines,
-    /((?:^[ \t]*\|[^\n]*\r?\n)+)[ \t]*(?:\r?\n[ \t]*)*\{#tab:([\p{L}0-9_-]+)\}(?:[ \t]*\[([^\]]*)\])?(?:[ \t]*\{\.?zoom=([\d.]+)\})?[ \t]*(?:\r?\n|$)/gmu,
-    (match, tableMd, label, caption, zoom) => {
+    /((?:^[ \t]*\|[^\n]*\r?\n)+)[ \t]*(?:\r?\n[ \t]*)*\{#tab:([\p{L}0-9_-]+)\}(?:[ \t]*\[([^\]]*)\])?(?:[ \t]*\{\.?zoom=([\d.]+)\})?[ \t]*(?=\r?\n|$)/gmu,
+    (match, tableMd, label, caption, zoom, off, src) => {
       let num;
       if (label in tabLabelNumbers) {
         num = tabLabelNumbers[label]; // Duplikat → erstes Vorkommen gewinnt
@@ -1628,12 +1631,19 @@ async function renderMarkdown(text, targetElement, options = {}) {
         }
         tabLabelNumbers[label] = num;
       }
+      // (sourceLines) Original-Zeilen der Tabellen-Zeilen JETZT erfassen:
+      // der _trackedReplace-Splice ersetzt die ganze Match-Region durch
+      // EINE Pipeline-Zeile — das per-Zeile-Mapping wäre danach weg.
+      // l0 = Pipeline-Zeile der Kopfzeile (Match startet an Zeilenanfang).
+      const l0 = src.slice(0, off).split('\n').length - 1;
+      const nRows = tableMd.split('\n').length - 1; // md endet mit \n
       tables.push({
         md: tableMd,
         label,
         caption: caption || '',
         num,
         zoom: zoom !== undefined ? parseFloat(zoom) : null, // Schrift ×X (s. 4b)
+        rows: lines.slice(l0, l0 + nRows),
       });
       return `%%TAB_${tables.length - 1}%%`;
     }
@@ -1678,7 +1688,7 @@ async function renderMarkdown(text, targetElement, options = {}) {
 
   // 2. Render Markdown (marked) — bei sourceLines erst Zeilen-Marker
   //    einfügen (1m), damit am Ende data-src-line gesetzt werden kann.
-  let html = marked.parse(sourceLines ? _insertSrcLineMarkers(processed, lines, lineOffset) : processed, {
+  let html = marked.parse(sourceLines ? _insertSrcLineMarkers(processed, lines, lineOffset, tables) : processed, {
     breaks,
     gfm: true,
     headerIds: false,
@@ -2580,7 +2590,7 @@ async function renderMarkdown(text, targetElement, options = {}) {
 // keine Zeilenzahl). Marker = <div> auf eigener Zeile (1. Zeile endet mit
 // ">" + Zeilenumbruch → marked-HTML-Block), vom Folgeblock durch Leerzeile
 // getrennt. → _applySrcLineMarkers am Ende.
-function _insertSrcLineMarkers(text, lines, lineOffset) {
+function _insertSrcLineMarkers(text, lines, lineOffset, tables) {
   const tokens = marked.lexer(text, { breaks: false, gfm: true });
   const norm = text.replace(/\r\n|\r/g, '\n')
                    .replace(/^( *)(\t+)/gm, (m, l, t) => l + '    '.repeat(t.length));
@@ -2600,8 +2610,49 @@ function _insertSrcLineMarkers(text, lines, lineOffset) {
       const off = lineOff[line];
       if (off > last) {
         const n = (lines[line] != null ? lines[line] : 0) + lineOffset;
+        // Feinere Zeilen innerhalb eines Blocks (data-sub): marked lext
+        // eine ganze Liste/Tabelle als EINEN Token — ohne Sub-Zeilen
+        // träfen Doppelklick/Scroll-Sync immer nur die Block-Anfangs-
+        // zeile. Format "l1,l2,..." (gleiche Nummerierung wie data-line);
+        // _applySrcLineMarkers verteilt sie auf <li> bzw. <tr>.
+        let sub = '';
+        const subLine = (l) => (lines[l] != null ? lines[l] : 0) + lineOffset;
+        if (tok.type === 'list' && tok.items && tok.items.length) {
+          // Item-Raws kacheln list.raw lückenlos (nur das letzte Item
+          // ist trimEnd'ed — seine Startposition bleibt exakt) →
+          // Präfixsumme über die Item-Raws = Startzeile je Item.
+          const parts = [];
+          let o = cursor;
+          for (const it of tok.items) {
+            let l = line;
+            while (lineOff[l + 1] !== undefined && lineOff[l + 1] <= o) l++;
+            parts.push(subLine(l));
+            o += it.raw.length;
+          }
+          sub = parts.join(',');
+        } else if (tok.type === 'table') {
+          // GFM: Kopfzeile, Trennzeile, dann je Zeile genau eine
+          // Source-Zeile → Kopf = line, Zeile i = line+2+i.
+          const parts = [subLine(line)];
+          for (let i = 0; i < tok.rows.length; i++) parts.push(subLine(line + 2 + i));
+          sub = parts.join(',');
+        } else if (tok.type === 'paragraph' && tables && tables.length) {
+          // Beschriftete Tabelle: die Pipeline hat „Tabellen-Blöcke +
+          // Label-Zeile“ bereits zu %%TAB_N%% extrahiert (eine Zeile)
+          // → marked sieht KEIN table-Token. Per-Zeile-Mapping wurde in 1j2
+          // als tbl.rows erfasst (Original-Zeilen: Kopf, Trennzeile, Daten).
+          const t = /^%%TAB_(\d+)%%$/.exec(tok.text.trim());
+          const tbl = t && tables[t[1]];
+          if (tbl && tbl.rows && tbl.rows.length) {
+            // sub-Format wie beim nativen table-Token: [Kopf, Daten…] —
+            // die Trennzeile (Index 1) hat kein <tr> → weglassen.
+            const parts = [tbl.rows[0]];
+            for (let i = 2; i < tbl.rows.length; i++) parts.push(tbl.rows[i]);
+            sub = parts.map((r) => r + lineOffset).join(',');
+          }
+        }
         out += norm.slice(last, off) +
-          `<div class="sq-slm" data-line="${n}">\n</div>\n\n`;
+          `<div class="sq-slm" data-line="${n}"${sub ? ` data-sub="${sub}"` : ''}>\n</div>\n\n`;
         last = off;
       }
     }
@@ -2618,7 +2669,38 @@ function _insertSrcLineMarkers(text, lines, lineOffset) {
 function _applySrcLineMarkers(root) {
   for (const m of root.querySelectorAll('.sq-slm')) {
     const el = m.nextElementSibling;
-    if (el) el.dataset.srcLine = m.dataset.line;
+    if (el) {
+      el.dataset.srcLine = m.dataset.line;
+      // Sub-Zeilen (Listen-Items / Tabellen-Zeilen) auf die Kinder
+      // verteilen, damit Doppelklick/Scroll-Sync blockintern fein
+      // auflösen können.
+      const sub = m.dataset.sub;
+      if (sub) {
+        const subLines = sub.split(',').map(Number);
+        if (el.tagName === 'UL' || el.tagName === 'OL') {
+          const lis = el.children; // nur <li>
+          for (let i = 0; i < subLines.length; i++) {
+            if (!lis[i]) break;
+            lis[i].dataset.srcLine = subLines[i];
+          }
+        } else {
+          // Tabelle (ggf. in .aicampus-table-scroll verpackt).
+          // subLines[0] = Kopfzeile, subLines[1+i] = Datenzeile i; leere
+          // theads sind entfernt (_stripEmptyTableHead) — die tbody-
+          // Indexierung (i+1) ist in beiden Fällen korrekt.
+          const tbl = el.tagName === 'TABLE' ? el : el.querySelector('table');
+          if (tbl) {
+            const theadTr = tbl.querySelector('thead > tr');
+            if (theadTr) theadTr.dataset.srcLine = subLines[0];
+            const bodyTrs = tbl.querySelectorAll('tbody > tr');
+            for (let i = 0; i + 1 < subLines.length; i++) {
+              if (!bodyTrs[i]) break;
+              bodyTrs[i].dataset.srcLine = subLines[i + 1];
+            }
+          }
+        }
+      }
+    }
     m.remove();
   }
 }

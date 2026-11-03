@@ -585,6 +585,20 @@
       });
     });
 
+    // Doppelklick in der Preview: Editor-Cursor auf den passenden Block
+    // (blockgenaue Auflösung wie die Scroll-Sync, via data-src-line) und
+    // Editor fokussieren, damit direkt getippt werden kann. Nur wenn der
+    // Editor sichtbar ist; ohne Marker (z. B. Captions) bleibt das
+    // normale Wort-Selektions-Verhalten erhalten.
+    previewPane.addEventListener('dblclick', (e) => {
+      if (!modes.edit || !contentEditor.cm) return;
+      const el = e.target.closest('[data-src-line]');
+      if (!el) return;
+      e.preventDefault();
+      contentEditor.cm.scrollToLineTop(+el.dataset.srcLine);
+      contentEditor.cm.focus();
+    });
+
     card._edit.modes = modes;
     card._edit.applyModes = apply;
     apply();
