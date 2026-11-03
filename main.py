@@ -299,6 +299,7 @@ templates.env.globals["asset"] = _asset
 # Zeit umgerechnet (s. base.html); Deadlines werden normalisiert (…Z).
 templates.env.globals["utc_iso"] = timeutil.utc_iso
 templates.env.globals["deadline_iso"] = timeutil.deadline_iso
+templates.env.globals["deadline_expired"] = timeutil.deadline_expired
 
 # Web Push (M3): Status + öffentlicher VAPID-Key für das Frontend
 # („Push aktivieren“-Button im Glocken-Menü + SW-Registration).

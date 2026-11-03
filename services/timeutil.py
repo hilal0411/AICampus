@@ -60,6 +60,20 @@ def deadline_iso(value: Optional[str]) -> Optional[str]:
         return value
 
 
+def deadline_expired(value: Optional[str]) -> bool:
+    """True, wenn die Deadline existiert und bereits verstrichen ist (UTC).
+
+    Unparsebare Werte → False (defensiv).
+    """
+    if not value:
+        return False
+    try:
+        dl = parse_deadline(value)
+    except (ValueError, KeyError):
+        return False
+    return datetime.now(timezone.utc) > dl
+
+
 def deadline_from_local(value: str, tz_name: Optional[str] = None) -> str:
     """Lokaler Wall-Clock-Wert → ISO-UTC mit Z.
 

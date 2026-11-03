@@ -75,8 +75,9 @@
         {{ total_attempts }}{% if task.max_attempts %} / {{ task.max_attempts }}{% endif %} Versuche
       </span>
       {% if task.deadline %}
-      <span class="badge px-2 py-0.5 rounded bg-orange-100 text-orange-700">
-        ⏰ Deadline: <span data-ts="{{ deadline_iso(task.deadline) }}"></span>
+      {% set dl_expired = deadline_expired(task.deadline) %}
+      <span class="badge px-2 py-0.5 rounded {% if dl_expired %}bg-red-100 text-red-700{% else %}bg-orange-100 text-orange-700{% endif %}">
+        ⏰ Deadline{% if dl_expired %} abgelaufen{% else %}: <span data-ts="{{ deadline_iso(task.deadline) }}"></span>{% endif %}
       </span>
       {% endif %}
     </div>
@@ -215,9 +216,19 @@
             </div>
         </div>
 
-      {# Solution-Area je Aufgabentyp: %}
-      {# task_solve_text.html / task_solve_workspace.html #}
+      {# Solution-Area je Aufgabentyp (task_solve_text.html etc.) –
+         nach abgelaufener Deadline wird sie komplett ausgeblendet #}
+      {% if deadline_expired(task.deadline) %}
+      <div class="card border-red-200 bg-red-50 p-8 rounded-2xl text-center">
+        <div class="text-3xl mb-2">⏰</div>
+        <h2 class="font-semibold text-red-700">Deadline abgelaufen</h2>
+        <p class="text-sm text-red-600 mt-1">
+          Die Abgabefrist ist vorbei — es können keine weiteren Antworten eingereicht werden.
+        </p>
+      </div>
+      {% else %}
       {% block solution_area %}{% endblock %}
+      {% endif %}
 
       <!-- ─── Test Results ─────────────────────────────────── -->
       <div id="test-results" class="hidden"></div>
