@@ -1249,6 +1249,7 @@
       }
 
       let data = null;
+      let gradingFailed = false; // Server hat die Einreichung verworfen (404)
       {% if task.task_type == 'mc' %}
       // MC: serverseitig SYNCHRON bewertet (kein LLM-Grading, kein
       // Background-Job) → das fertige Ergebnis steht direkt in der
@@ -1280,6 +1281,11 @@
             if (data.status === "graded" || data.status === "error" || data.status === "overridden") {
               break; // Fertig (auch Fehler sind ein Endergebnis)!
             }
+          } else if (pollRes.status === 404) {
+            // Grading fehlgeschlagen (z. B. LLM-Timeout): der Server hat die
+            // Einreichung verworfen → sie zählt NICHT als Versuch.
+            gradingFailed = true;
+            break;
           }
         } catch {
           // Poll-Fehler ignorieren, einfach weiter pollen
@@ -1291,6 +1297,14 @@
       // cancelGrading() zurückgesetzt → nur noch State aufräumen.
       const wasCancelled = !!(gradingState && gradingState.cancelRequested);
       gradingState = null;
+      if (gradingFailed) {
+        clearInterval(gradingTimerInterval);
+        progressDiv.classList.add("hidden");
+        resetSolveTimer();
+        showToast("Bewertung fehlgeschlagen — diese Einreichung zählt nicht als Versuch. Bitte versuche es erneut.", "error");
+        setSubmitBtnGradingMode(false);
+        return;
+      }
       if (wasCancelled) {
         clearInterval(gradingTimerInterval);
         return;

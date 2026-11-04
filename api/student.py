@@ -479,6 +479,26 @@ async def submit_upload_solution(
 # BACKGROUND: Asynchrones Grading (Laeuft im Hintergrund)
 # ──────────────────────────────────────────────────────────────
 
+def _discard_submission(session: Session, submission: Submission) -> None:
+    """Einreichung vollständig verwerfen (DB + Platte) → sie zählt
+    nirgendwo mehr als Versuch. Wird bei manuellem Abbruch (cancel) und
+    bei fehlgeschlagenem Grading (LLM-Fehler/Timeout) verwendet."""
+    for fb in list(submission.feedback_list):
+        session.delete(fb)
+    for run in session.exec(
+        select(WorkspaceRun).where(WorkspaceRun.submission_id == submission.id)
+    ).all():
+        run.submission_id = None
+    if submission.workspace_snapshot:
+        # Snapshot (data/submissions/{id}/) von der Platte räumen
+        shutil.rmtree(SUBMISSION_DIR / str(submission.id), ignore_errors=True)
+    elif submission.upload_file:
+        # Upload-Datei + Extraktions-Cache von der Platte räumen
+        upload_service.cleanup_submission(submission.id, submission.upload_file)
+    session.delete(submission)
+    session.commit()
+
+
 async def _run_grading_background(
     task_id: int,
     submission_id: int,
@@ -511,19 +531,15 @@ async def _run_grading_background(
                 max_points=float(result.get("max_points", 0) or 0),
             )
     except Exception as e:
-        # Fehler: Status auf PENDING lassen + Fehler-Feedback speichern
+        # Grading-Fehler (z. B. LLM-Timeout): Einreichung wird verworfen,
+        # damit sie NICHT als Versuch zählt. Der Student wird per Glocke
+        # informiert. (CancelledError wird hier NICHT gefangen — den
+        # Abbruch räumt cancel_grading() selbst auf.)
+        logger.exception("Grading fehlgeschlagen (submission %s)", submission_id)
         try:
             with Session(engine) as err_session:
                 sub = err_session.get(Submission, submission_id)
                 if sub and sub.id is not None:
-                    sub.status = SubmissionStatus.PENDING
-                    err_session.add(Feedback(
-                        submission_id=sub.id,
-                        source=FeedbackSource.LLM,
-                        points_earned=0,
-                        comment=f"Grading-Fehler: {str(e)}",
-                    ))
-                    err_session.commit()
                     task = err_session.get(Task, task_id)
                     if task:
                         # Glocke: Student ueber den Fehler informieren
@@ -538,8 +554,12 @@ async def _run_grading_background(
                             success=False,
                             error=str(e)[:300],
                         )
+                    _discard_submission(err_session, sub)
         except Exception:
-            pass  # Logging hier waere ideal, aber nicht kritisch
+            logger.exception(
+                "Aufräumen nach Grading-Fehler (submission %s) fehlgeschlagen",
+                submission_id,
+            )
 
 
 # ──────────────────────────────────────────────────────────────
@@ -583,26 +603,26 @@ async def cancel_grading(
             pass  # z. B. Timeout
 
     # 2) Status frisch laden: Eventuell hat das Grading parallel fertig
-    #    geschrieben, bevor die Cancellation wirkte.
-    session.refresh(submission)
+    #    geschrieben, bevor die Cancellation wirkte. Hat das Grading
+    #    stattdessen gerade FEHLGESCHLAGEN, wurde die Einreichung
+    #    bereits verworfen → zählt nicht als Versuch.
+    try:
+        session.refresh(submission)
+    except Exception:
+        session.rollback()
+        gone = session.exec(
+            select(Submission).where(Submission.id == submission_id)
+        ).first()
+        if gone:
+            raise HTTPException(409, "Grading ist bereits beendet — die Einreichung zählt.")
+        return {
+            "message": "Abgebrochen — diese Einreichung zählt nicht als Versuch.",
+        }
     if submission.status != SubmissionStatus.PENDING:
         raise HTTPException(409, "Grading ist bereits beendet — die Einreichung zählt.")
 
-    # 3) Einreichung loeschen → wird nirgendwo mehr als Versuch gezählt.
-    for fb in list(submission.feedback_list):
-        session.delete(fb)
-    for run in session.exec(
-        select(WorkspaceRun).where(WorkspaceRun.submission_id == submission.id)
-    ).all():
-        run.submission_id = None
-    if submission.workspace_snapshot:
-        # Snapshot (data/submissions/{id}/) von der Platte räumen
-        shutil.rmtree(SUBMISSION_DIR / str(submission.id), ignore_errors=True)
-    elif submission.upload_file:
-        # Upload-Datei + Extraktions-Cache von der Platte räumen
-        upload_service.cleanup_submission(submission.id, submission.upload_file)
-    session.delete(submission)
-    session.commit()
+    # 3) Einreichung verwerfen → wird nirgendwo mehr als Versuch gezählt.
+    _discard_submission(session, submission)
 
     return {
         "message": "Abgebrochen — diese Einreichung zählt nicht als Versuch.",
@@ -662,28 +682,8 @@ async def get_submission_result(
         raise HTTPException(404, "Aufgabe nicht gefunden.")
 
     if submission.status.value == "pending":
-        # Prüfe ob es ein Fehler-Feedback gibt
-        has_error_feedback = False
-        for fb in submission.feedback_list:
-            if fb.comment.startswith("Grading-Fehler:"):
-                has_error_feedback = True
-                break
-
-        if has_error_feedback:
-            # Liefere den Fehler
-            for fb in submission.feedback_list:
-                if fb.comment.startswith("Grading-Fehler:"):
-                    _auto_read_llm_feedback(session, user, task)
-                    return {
-                        "status": "error",
-                        "submission_id": submission.id,
-                        "attempt_number": submission.attempt_number,
-                        "message": fb.comment,
-                        "points": 0,
-                        "comment": fb.comment,
-                        "max_points": task.max_points,
-                    }
-
+        # Grading läuft noch. (Fehlgeschlagenes Grading liefert 404:
+        # die Einreichung wurde verworfen und zählt nicht als Versuch.)
         return {
             "status": "pending",
             "submission_id": submission.id,

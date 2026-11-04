@@ -24,6 +24,12 @@ from database.models import (
 from services.llm_service import LLMService
 
 
+class GradingError(RuntimeError):
+    """LLM-Grading fehlgeschlagen (z. B. Timeout). Der Caller
+    (z. B. _run_grading_background) fängt das ab und wirft die
+    Einreichung weg, damit sie nicht als Versuch zählt."""
+
+
 class GradingService:
     """
     Koordiniert den kompletten Korrektur-Workflow.
@@ -35,6 +41,18 @@ class GradingService:
 
     def __init__(self):
         self.llm = LLMService()
+
+    @staticmethod
+    def _require_success(llm_result: dict) -> dict:
+        """Gibt das geparste LLM-JSON zurück. Liefert der LLM-Aufruf
+        success=False (Timeout/Fehler), wird GradingError geworfen —
+        sonst würde ein Timeout stumm als 0-Punkte-Bewertung mit
+        „Kein Feedback generiert.“ gespeichert und als Versuch zählen."""
+        if not llm_result.get("success"):
+            raise GradingError(
+                f"LLM-Grading fehlgeschlagen: "
+                f"{llm_result.get('error') or 'unbekannter Fehler'}")
+        return llm_result.get("data") or {}
 
     def get_llm_config(self, task: Task, session: Session) -> dict:
         """Liest LLM-Config via Resolver (course > global > .env > default)."""
@@ -85,7 +103,7 @@ class GradingService:
     ) -> dict:
         """LLM korrigiert Textaufgabe."""
         llm_cfg = self.get_llm_config(task, session)
-        llm_result = await self.llm.grade_text_task(
+        data = self._require_success(await self.llm.grade_text_task(
             task_description=task.description,
             model_solution=task.model_solution or "(Keine Musterloesung hinterlegt — bitte eigenstaendig bewerten)",
             student_solution=submission.solution,
@@ -93,9 +111,7 @@ class GradingService:
             text_template=task.text_template,
             custom_prompt=custom_prompt,
             config=llm_cfg,
-        )
-
-        data = llm_result.get("data", {})
+        ))
         points = float(data.get("points", 0))
         comment = data.get("feedback", "Kein Feedback generiert.")
 
@@ -249,18 +265,16 @@ class GradingService:
         ctx = workspace_service.grade_context(session, task, submission)
 
         llm_cfg = self.get_llm_config(task, session)
-        llm_result = await self.llm.grade_workspace_task(
+        data = self._require_success(await self.llm.grade_workspace_task(
             task_description=task.description,
             private_files=self._format_files(ctx.get("private_files") or {}) or
-                              "(Keine privaten Dateien hinterlegt — bitte eigenstaendig bewerten)",
+                               "(Keine privaten Dateien hinterlegt — bitte eigenstaendig bewerten)",
             student_files=self._format_files(ctx.get("student_files") or {}),
             test_results=test_output,
             max_points=task.max_points,
             custom_prompt=custom_prompt,
             config=llm_cfg,
-        )
-
-        data = llm_result.get("data", {})
+        ))
         points = float(data.get("points", 0))
         comment = data.get("feedback", "Kein Feedback generiert.")
 
@@ -301,7 +315,7 @@ class GradingService:
             upload_service.collect_upload_texts(model_path) if model_path else {})
 
         llm_cfg = self.get_llm_config(task, session)
-        llm_result = await self.llm.grade_upload_task(
+        data = self._require_success(await self.llm.grade_upload_task(
             task_description=task.description,
             model_solution=task.model_solution or "(Keine Musterloesung hinterlegt — bitte eigenstaendig bewerten)",
             model_solution_files=self._format_files(model_files) or
@@ -311,9 +325,7 @@ class GradingService:
             max_points=task.max_points,
             custom_prompt=custom_prompt,
             config=llm_cfg,
-        )
-
-        data = llm_result.get("data", {})
+        ))
         points = float(data.get("points", 0))
         comment = data.get("feedback", "Kein Feedback generiert.")
 
