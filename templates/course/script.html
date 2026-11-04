@@ -130,6 +130,8 @@
   // Gemeinsame Ansicht für alle Rollen; Tutor/PROF/Admin zusätzlich mit
   // Bearbeitung (Drag-Handle, Toolbar, Inline-Formular, neues Kapitel).
   const SQ_IS_TUTOR = {{ 'true' if is_tutor or is_admin else 'false' }};
+  // Deep-Link /script/{section_id}: Kapitel aufklappen + #chapter-Hash nachtragen
+  const SQ_OPEN_SECTION = {{ open_section_id or 'null' }};
 
   function decodeHtml(text) {
     return text.replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&#x27;/g, "'").replace(/&amp;/g, '&').replace(/&lt;/g, '<').replace(/&gt;/g, '>');
@@ -1327,6 +1329,12 @@
       handleObjectHash();
       handleSectionHash();
       handleQuestionHash();
+      // Deep-Link /script/{section_id} (ohne Hash): Hash nachtragen, damit die
+      // URL teilbar bleibt, und das Kapitel anfahren (Expand + Scroll).
+      if (SQ_OPEN_SECTION != null && !location.hash) {
+        history.replaceState(null, "", location.pathname + "#chapter-" + SQ_OPEN_SECTION);
+        handleChapterHash();
+      }
     } catch (e) {
       container.innerHTML = '<p class="text-red-500 text-sm">Fehler beim Laden des Skripts.</p>';
     }

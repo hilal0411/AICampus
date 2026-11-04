@@ -1462,6 +1462,11 @@ class McpOAuthToken(SQLModel, table=True):
     refresh_expires_at: datetime
     created_at: datetime = Field(default_factory=datetime.now)
     last_used_at: Optional[datetime] = Field(default=None)
+    # Replay-Toleranz nach Refresh-Rotation: der alte Hash bleibt kurz gültig,
+    # damit parallele/retierende Client-Requests (z. B. ChatGPT) den Grant
+    # nicht mit einem 400 brechen (RFC 6749 §10.4).
+    prev_refresh_hash: Optional[str] = Field(default=None, max_length=64)
+    prev_refresh_valid_until: Optional[datetime] = Field(default=None)
 
 
 class McpOAuthGrantCourse(SQLModel, table=True):

@@ -116,8 +116,12 @@ def _get_best_score(subs: Sequence[Submission]) -> float:
 async def lifespan(app: FastAPI):
     """App-Start: DB-Tabellen erstellen + Schema-Migration + Admin-User bei leerer DB."""
     # MCP-Subapp: Starlette-Mount führt den Lifespan des Sub-Apps (Session-Manager-
-    # Task-Group) nicht selbst aus — hier manuell starten/stoppen.
-    async with mcp_server_api.mcp_app.router.lifespan_context(mcp_server_api.mcp_app):
+    # Task-Group) nicht selbst aus — hier manuell starten/stoppen. mcp_app_raw:
+    # mcp_app ist der CORS-Wrapper (s. api/mcp_server.py), das nackte SDK-App
+    # muss hier laufen.
+    async with mcp_server_api.mcp_app_raw.router.lifespan_context(
+        mcp_server_api.mcp_app_raw
+    ):
         create_db_and_tables()
         migrate_schema()
         migrate_script_sections()
@@ -435,6 +439,26 @@ app.include_router(mcp_oauth.consent_router)
 # Starlette behandelt nur Funktionen/Methoden als request-response-Endpoint,
 # alles andere als ASGI-App (Doppel-Wrapping → TypeError).
 from starlette.routing import Route
+from pydantic import AnyHttpUrl
+from mcp.server.auth.routes import create_auth_routes
+from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
+
+# OAuth-Endpunkte (RFC 8414/6749) einmal anlegen: am Domain-Root spiegeln
+# (Claude streift den /mcp-Pfad von der Issuer-URL und probiert root-level
+# URLs; 404 auf .../register war der Grund fuer das Scheitern von
+# "Automatisch registrieren") und als Aliase UNTER dem /mcp-Prefix: ChatGPT
+# probiert <mcp_url>/.well-known/openid-configuration - die Routen muessten
+# VOR dem Mount stehen, sonst frisst die Sub-App den Pfad (404).
+# Gleicher Provider -> gleiche Clients.
+_mcp_auth_routes = create_auth_routes(
+    mcp_server_api.provider,
+    AnyHttpUrl(mcp_server_api.MCP_ISSUER),
+    client_registration_options=ClientRegistrationOptions(enabled=True),
+    revocation_options=RevocationOptions(enabled=True),
+)
+_mcp_metadata = next(
+    _r for _r in _mcp_auth_routes if _r.path == "/.well-known/oauth-authorization-server"
+)
 
 class _MCPAppNoSlash:
     async def __call__(self, scope, receive, send):
@@ -443,6 +467,11 @@ class _MCPAppNoSlash:
         await mcp_server_api.mcp_app(scope, receive, send)
 
 app.router.routes.append(Route("/mcp", _MCPAppNoSlash()))
+# Metadata unter der MCP-URL: OIDC-Name (ChatGPT) + RFC-8414-Name.
+app.router.routes.append(Route("/mcp/.well-known/openid-configuration",
+                               _mcp_metadata.endpoint, methods=_mcp_metadata.methods))
+app.router.routes.append(Route("/mcp/.well-known/oauth-authorization-server",
+                               _mcp_metadata.endpoint, methods=_mcp_metadata.methods))
 app.mount("/mcp", mcp_server_api.mcp_app)
 
 # RFC 9728 Protected-Resource-Metadata am Domain-Root: der WWW-Authenticate-Header
@@ -453,23 +482,14 @@ for _r in mcp_server_api.protected_resource_routes:
     app.add_route(_r.path.rstrip("/"), _r.endpoint, methods=_r.methods)
     app.add_route("/.well-known/oauth-protected-resource", _r.endpoint, methods=_r.methods)
 
-# RFC 8414/6749 am Domain-Root: Claudes OAuth-/DCR-Modul streift den /mcp-Pfad
-# von der Issuer-URL und probiert root-level URLs (…/register → 404 war der
-# Grund für das scheitern von „Automatisch registrieren"). Deshalb hier die
-# kompletten OAuth-Endpunkte spiegeln — gleicher Provider → gleiche Clients.
-# AS-Metadata zusätzlich in der Path-Suffix-Form (RFC 8414 §3.2.3).
-from pydantic import AnyHttpUrl
-from mcp.server.auth.routes import create_auth_routes
-from mcp.server.auth.settings import ClientRegistrationOptions, RevocationOptions
-for _r in create_auth_routes(
-    mcp_server_api.provider,
-    AnyHttpUrl(mcp_server_api.MCP_ISSUER),
-    client_registration_options=ClientRegistrationOptions(enabled=True),
-    revocation_options=RevocationOptions(enabled=True),
-):
+# OAuth-Endpunkte am Domain-Root (s. oben) + AS-Metadata in der Path-Suffix-
+# Form (RFC 8414 Section 3.2.3) und unter dem OIDC-Namen (ChatGPT-Variante).
+for _r in _mcp_auth_routes:
     app.add_route(_r.path, _r.endpoint, methods=_r.methods)
     if _r.path == "/.well-known/oauth-authorization-server":
         app.add_route(_r.path + "/mcp", _r.endpoint, methods=_r.methods)
+        app.add_route("/.well-known/openid-configuration", _r.endpoint, methods=_r.methods)
+        app.add_route("/.well-known/openid-configuration/mcp", _r.endpoint, methods=_r.methods)
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1276,8 +1296,12 @@ async def tasks_page(
     return templates.TemplateResponse(template, ctx)
 
 
-def _render_script_page(session, user, request, course_id):
-    """Geteiltes Rendering des Skript-Tabs (auch für Deep-Links zu einzelnen Kapiteln)."""
+def _render_script_page(session, user, request, course_id, open_section_id=None):
+    """Geteiltes Rendering des Skript-Tabs (auch für Deep-Links zu einzelnen Kapiteln).
+
+    open_section_id: Deep-Link /script/{section_id} → Template klafft das
+    Kapitel client-seitig auf (SQ_OPEN_SECTION in script.html).
+    """
     membership, ctx = _course_tab_context(session, user, request, course_id, active_tab="script")
     if not membership and user.role != GlobalUserRole.ADMIN:
         raise HTTPException(403, "Du bist kein Mitglied dieses Kurses.")
@@ -1302,6 +1326,7 @@ def _render_script_page(session, user, request, course_id):
     ]
     ctx["page_title"] = f"Skript — {ctx['course']['name']}"
     ctx["code_editor"] = True  # CodeMirror (Markdown-Mode) für die Kapitel-Editoren
+    ctx["open_section_id"] = open_section_id
     return templates.TemplateResponse("course/script.html", ctx)
 
 
@@ -1332,7 +1357,7 @@ async def script_section_page(
     section = session.get(ScriptSection, section_id)
     if not section or section.course_id != course_id:
         raise HTTPException(404, "Kapitel nicht gefunden.")
-    return _render_script_page(session, user, request, course_id)
+    return _render_script_page(session, user, request, course_id, open_section_id=section_id)
 
 
 @app.get("/courses/{course_id}/script/{section_id}/print")

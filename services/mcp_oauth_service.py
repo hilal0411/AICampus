@@ -26,6 +26,13 @@ from services.timeutil import utc_iso
 ACCESS_TTL = timedelta(hours=1)
 REFRESH_TTL = timedelta(days=90)
 CODE_TTL = timedelta(minutes=10)
+# Kurzes Fenster, in dem der vor der Rotation verbrauchte Refresh-Hash noch
+# akzeptiert wird (parallele/retierende Client-Requests, s. lookup_refresh).
+REFRESH_ROTATION_GRACE = timedelta(seconds=30)
+# ChatGPT doppelt den Code-Exchange kurz nach dem Erfolg (duplicate
+# Callback) — ohne Toleranzfenster bricht das 400 den ganzen Connector.
+# Innerhalb des Fensters ist der Replay idempotent (s. Provider-Calls).
+CODE_REPLAY_GRACE = timedelta(minutes=5)
 
 
 def _hash(raw: str) -> str:
@@ -153,30 +160,34 @@ def confirm_code(
 
 
 def consume_code(session: Session, row: McpOAuthCode):
-    """Code als verbraucht markieren (Einmal-Nutzung)."""
-    if row.used_at is None:
-        row.used_at = datetime.now()
-        session.add(row)
-        session.commit()
+    """Code als verbraucht markieren; bei Replay zieht das Toleranzfenster
+    (CODE_REPLAY_GRACE) weiter."""
+    row.used_at = datetime.now()
+    session.add(row)
+    session.commit()
 
 
 # ─── Token-Paare ──────────────────────────────────────────────────
 
 def issue_token_pair(
-    session: Session, client_id: str, user_id: int, allow_write: bool
+    session: Session, client_id: str, user_id: int, allow_write: bool,
+    delete_existing: bool = True,
 ) -> Tuple[McpOAuthToken, str, str]:
     """Neues Access+Refresh-Paar → (row, access_raw, refresh_raw).
 
-    Es existiert genau EIN gültiges Paar pro User+Client: ältere Paare
-    werden gelöscht (sonst könnten veraltete allow_write-Snapshots
-    neben dem aktuellen weiterleben)."""
-    for row in session.exec(
-        select(McpOAuthToken)
-        .where(McpOAuthToken.user_id == user_id)
-        .where(McpOAuthToken.client_id == client_id)
-    ).all():
-        session.delete(row)
-    session.flush()
+    Standard: es existiert genau EIN gültiges Paar pro User+Client — ältere
+    Paare werden gelöscht (sonst könnten veraltete allow_write-Snapshots
+    neben dem aktuellen weiterleben). Bei Code-Replay (delete_existing=False)
+    überlebt das alte Paar bis zum natürlichen Ablauf — egal welches der
+    beiden Token-Responses der Client behält, eines bleibt gültig."""
+    if delete_existing:
+        for row in session.exec(
+            select(McpOAuthToken)
+            .where(McpOAuthToken.user_id == user_id)
+            .where(McpOAuthToken.client_id == client_id)
+        ).all():
+            session.delete(row)
+        session.flush()
     a_raw, a_hash = generate_access_token()
     r_raw, r_hash = generate_refresh_token()
     row = McpOAuthToken(
@@ -194,9 +205,13 @@ def issue_token_pair(
 
 
 def rotate_refresh(session: Session, row: McpOAuthToken) -> Tuple[str, str]:
-    """Refresh-Token rotieren (neuer Hash auf derselben Zeile → der alte
-    ist sofort ungültig). → (refresh_raw, refresh_hash)."""
+    """Refresh-Token rotieren (neuer Hash auf derselben Zeile). Der alte Hash
+    bleibt im kurzen Toleranzfenster gültig (s. lookup_refresh): Client-Requests
+    können doppelt ankommen (parallel/Retry) — ohne Fenster würde der zweite
+    Request mit 400 den ganzen Grant brechen. → (refresh_raw, refresh_hash)."""
     raw, h = generate_refresh_token()
+    row.prev_refresh_hash = row.refresh_hash
+    row.prev_refresh_valid_until = datetime.now() + REFRESH_ROTATION_GRACE
     row.refresh_hash = h
     row.refresh_expires_at = datetime.now() + REFRESH_TTL
     session.add(row)
@@ -232,6 +247,15 @@ def lookup_refresh(session: Session, raw: str) -> Optional[McpOAuthToken]:
     row = session.exec(
         select(McpOAuthToken).where(McpOAuthToken.refresh_hash == _hash(raw))
     ).first()
+    if not row:
+        # Replay eines bereits rotierten Refresh-Token im Toleranzfenster →
+        # idempotent auf dasselbe Paar (sonst 400 → Grant kaputt).
+        row = session.exec(
+            select(McpOAuthToken).where(
+                McpOAuthToken.prev_refresh_hash == _hash(raw),
+                McpOAuthToken.prev_refresh_valid_until > datetime.now(),
+            )
+        ).first()
     if not row or row.refresh_expires_at < datetime.now():
         return None
     return row

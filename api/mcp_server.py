@@ -285,9 +285,13 @@ def _ref_match(text: str, query: str) -> bool:
 
 # ─── Server + Tools ───────────────────────────────────────────────
 
-server = MCPServer(
-    "AICampus",
-    instructions=(
+# Basis-URL für Deep-Links in den Tool-Antworten (s. instructions unten)
+_MCP_BASE = f"https://{PUBLIC_DOMAIN}" if PUBLIC_DOMAIN else "https://aicampus.example.com"
+
+# Server-Instructions: wandern per initialize an Clients, die das anzeigen
+# (Claude Desktop & Co.); für Clients ohne Instructions-Support (ChatGPT)
+# liefert das aicampus_mcp_instructions-Tool denselben Text.
+_MCP_INSTRUCTIONS = (
         "AICampus-Kursinhalte: Vorlesungsskripte, Folien (Slide-Decks), "
         "Übungsaufgaben, Quellen-Bibliothek, Bilder und interaktive Applets. Alle "
         "Kurs-Tools brauchen ein course_id: rufe zuerst list_courses() auf, "
@@ -339,9 +343,29 @@ server = MCPServer(
         "list_versions, Rückgängig: restore_version. Bevor du Inhalte anlegst"
         " oder änderst, rufe markdown_manual(kind) auf, um die "
         "AICampus-Markdown-Syntax zu lernen (KaTeX, Abbildungen/Labels, "
-        "Querverweise, Folien-Direktiven, Applets)."
-    ),
+        "Querverweise, Folien-Direktiven, Applets).\n"
+        f"Links: Wenn der User nach einem Link zu einem Kurs-Element fragt, "
+        f"konstruiere die URL direkt aus den von den Tools zurückgegebenen "
+        f"IDs (Basis-URL {_MCP_BASE}): "
+        f"Kurs /courses/{{course_id}}; Übungsaufgabe /courses/{{course_id}}/tasks/{{task_id}}; "
+        f"Slide-Deck (Ansicht) /courses/{{course_id}}/slides/{{deck_id}}, "
+        f"(Präsentation) /courses/{{course_id}}/slides/{{deck_id}}/present "
+        f"(PDF-Variante: ?print-pdf anhängen; einzelne Folie: /present#/H/V anhängen, "
+        f"H = 0-basierte Foliennummer, V = Fragment-Nummer im Slide (0, wenn keine)); "
+        f"Skript-Kapitel /courses/{{course_id}}/script/{{section_id}}. "
+        f"Zu einzelnen Elementen im Skript: auf die Basis-URL "
+        f"/courses/{{course_id}}/script einen Fragment-Link anhängen — "
+        f"#chapter-{{section_id}} (Kapitel), #eq:{{label}} (Formel), #fig:{{label}} "
+        f"(Abbildung), #code:{{label}}, #box:{{label}}, #tab:{{label}}, #sec:{{label}} "
+        f"(Abschnitts-Heading); das Kapitel klappt dabei automatisch auf. Die Labels "
+        f"siehst du als Marker wie {{#eq:label}} in den von read_script_section() "
+        f"gelieferten Inhalten — nur tatsächlich vorhandene Labels verwenden, "
+        f"keine erfinden. Die Links funktionieren "
+        f"nur für eingeloggte AICampus-User mit Kurs-Mitgliedschaft — course_id "
+        f"immer aus list_courses()/course_overview() nehmen, nicht raten."
 )
+
+server = MCPServer("AICampus", instructions=_MCP_INSTRUCTIONS)
 
 
 # ─── Nutzungs-Tracking (Analytics-Dashboard) ───────────────────────
@@ -385,6 +409,22 @@ def mcp_tool(fn):
         return result
 
     return server.tool()(wrapper)
+
+
+@mcp_tool
+async def aicampus_mcp_instructions(ctx: Context) -> str:
+    """AICampus-MCP-Anweisungen — READ FIRST (once per session).
+
+    Please read these instructions first if you don't already have access
+    to the AICampus MCP server instructions (some clients, e.g. ChatGPT,
+    do not pass them to the model). They contain important usage
+    information for all AICampus tools: the expected workflow, how to
+    navigate courses, and how to create links/URLs to course elements
+    (tasks, slide decks, script chapters). Call it before using the
+    other tools."""
+    with Session(engine) as session:
+        _auth(ctx, session, None, tool_name="aicampus_mcp_instructions")
+    return _MCP_INSTRUCTIONS
 
 
 @mcp_tool
@@ -2819,7 +2859,7 @@ protected_resource_routes = create_protected_resource_routes(
 # create_auth_routes(…) am Domain-Root (Claude-Discovery) — die Optionen
 # dort müssen mit den AuthSettings unten synchron bleiben!
 
-mcp_app = server._lowlevel_server.streamable_http_app(
+mcp_app_raw = server._lowlevel_server.streamable_http_app(
     streamable_http_path="/",
     stateless_http=True,
     transport_security=TransportSecuritySettings(enable_dns_rebinding_protection=False),
@@ -2835,3 +2875,55 @@ mcp_app = server._lowlevel_server.streamable_http_app(
     token_verifier=ProviderTokenVerifier(provider),
     auth_server_provider=provider,
 )
+
+
+# ─── CORS für Browser-basierte MCP-Clients (z. B. lokale LLM-WebUIs) ───
+#
+# Das SDK hängt CORS-Header nur an die OAuth-Metadata-/Token-Endpunkte, nicht
+# an den Streamable-HTTP-Endpunkt selbst — Browser-Clients (cross-site Origin
+# + Authorization-Header) scheitern am fehlenden Preflight + ACAO-Header.
+# Reines ASGI (kein BaseHTTPMiddleware): streamt SSE ohne Pufferung.
+# ACAO „*“ ist sicher: ohne gültiges Bearer-Token gibt es 401, Cookies
+# spielt der Endpunkt keine Rolle.
+_CORS_ALLOW_HEADERS = (
+    "authorization, content-type, accept, mcp-session-id, last-event-id, "
+    "mcp-protocol-version"
+)
+
+
+def _with_cors(app):
+    async def wrapped(scope, receive, send):
+        if scope["type"] != "http" or scope.get("method") != "OPTIONS":
+            async def send_with_cors(message):
+                if message["type"] == "http.response.start":
+                    headers = list(message.get("headers") or [])
+                    headers.append((b"access-control-allow-origin", b"*"))
+                    message = {**message, "headers": headers}
+                await send(message)
+            await app(scope, receive, send_with_cors)
+            return
+        # Angefragte Header 1:1 erlauben (Echo) — so funktionieren auch
+        # MCP-Header, die wir hier nicht einzeln kennen müssen.
+        requested = next(
+            (v.decode() for k, v in scope.get("headers", [])
+             if k == b"access-control-request-headers"),
+            _CORS_ALLOW_HEADERS,
+        )
+        await send({
+            "type": "http.response.start",
+            "status": 204,
+            "headers": [
+                (b"access-control-allow-origin", b"*"),
+                (b"access-control-allow-methods", b"GET, POST, DELETE, OPTIONS"),
+                (b"access-control-allow-headers", requested.encode()),
+                (b"access-control-max-age", b"86400"),
+            ],
+        })
+        await send({"type": "http.response.body", "body": b""})
+
+    return wrapped
+
+
+# mcp_app_raw bleibt für main.py referenziert: der Sub-App-Lifespan
+# (Session-Manager-Task-Group) muss über das nackte SDK-App laufen.
+mcp_app = _with_cors(mcp_app_raw)

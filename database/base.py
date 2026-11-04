@@ -230,6 +230,11 @@ def migrate_schema():
         "mcp_tokens": {
             "allow_write": "BOOLEAN DEFAULT 1",  # PAT-Write-Schalter (Einstellungen → MCP)
         },
+        "mcp_oauth_tokens": {
+            # Replay-Toleranz für Refresh-Rotation (ChatGPT-400s, s. McpOAuthToken)
+            "prev_refresh_hash": "VARCHAR(64)",
+            "prev_refresh_valid_until": "DATETIME",
+        },
     }
     column_drops = {
         "course_media": ["is_visible"],  # Sichtbarkeit steuert der einbindende Inhalt

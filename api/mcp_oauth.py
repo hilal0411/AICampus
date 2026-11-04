@@ -13,6 +13,7 @@ Drei Bausteine:
 
 import json
 import logging
+from datetime import datetime
 from typing import List, Optional
 from urllib.parse import quote
 
@@ -132,8 +133,32 @@ class AICampusAuthProvider(OAuthAuthorizationServerProvider):
     async def load_authorization_code(self, client: OAuthClientInformationFull, code_str: str):
         with Session(engine) as session:
             row = mcp_oauth_service.get_code_by_raw(session, code_str)
-            if not row or row.used_at or row.user_id is None:
+            replay = bool(
+                row and row.used_at
+                and (datetime.now() - row.used_at) <= mcp_oauth_service.CODE_REPLAY_GRACE
+            )
+            if (
+                not row or row.user_id is None or row.expires_at < datetime.now()
+                or row.client_id != client.client_id
+                or (row.used_at and not replay)
+            ):
+                # Diagnose (ChatGPT-400s am Token-Endpoint): zu alter Replay,
+                # fremder Client oder unbekannter/abgelaufener Code?
+                logger.info(
+                    "[MCP-OAuth] Code-Exchange abgelehnt: client=%s, vorhanden=%s, "
+                    "client_match=%s, verbraucht=%s, replay_fenster=%s, consentet=%s, abgelaufen=%s",
+                    client.client_id, bool(row),
+                    bool(row and row.client_id == client.client_id),
+                    bool(row and row.used_at), replay,
+                    bool(row and row.user_id is not None),
+                    bool(row and row.expires_at < datetime.now()),
+                )
                 return None  # abgelaufen / verbraucht / nicht consentet = existiert nicht
+            if replay:
+                # ChatGPT doppelt den Callback — Replay im Toleranzfenster ist
+                # idempotent (sonst bricht das 400 den Connector).
+                logger.info("[MCP-OAuth] Code-Replay im Toleranzfenster akzeptiert (client=%s).",
+                            client.client_id)
             return AICampusAuthCode(
                 code=code_str,
                 scopes=[],
@@ -151,14 +176,25 @@ class AICampusAuthProvider(OAuthAuthorizationServerProvider):
     async def exchange_authorization_code(self, client: OAuthClientInformationFull, code: AICampusAuthCode) -> OAuthToken:
         with Session(engine) as session:
             row = mcp_oauth_service.get_code_by_raw(session, code.code)
-            if not row or row.used_at or row.user_id is None:
+            replay = bool(
+                row and row.used_at
+                and (datetime.now() - row.used_at) <= mcp_oauth_service.CODE_REPLAY_GRACE
+            )
+            if (
+                not row or row.user_id is None or row.expires_at < datetime.now()
+                or row.client_id != client.client_id
+                or (row.used_at and not replay)
+            ):
                 raise TokenError(
                     error="invalid_grant",
                     error_description="Der Autorisierungs-Code ist ungültig oder abgelaufen.",
                 )
             user_id = row.user_id
+            # Replay: altes Paar lebt weiter (delete_existing=False), damit es
+            # egal ist, welchen der beiden Responses der Client speichert.
             _, access_raw, refresh_raw = mcp_oauth_service.issue_token_pair(
-                session, row.client_id, user_id, row.allow_write
+                session, row.client_id, user_id, row.allow_write,
+                delete_existing=not replay,
             )
             mcp_oauth_service.set_grant_courses(session, user_id, row.client_id, code.course_ids)
             mcp_oauth_service.consume_code(session, row)
@@ -174,6 +210,11 @@ class AICampusAuthProvider(OAuthAuthorizationServerProvider):
         with Session(engine) as session:
             row = mcp_oauth_service.lookup_refresh(session, refresh_token)
             if not row or row.client_id != client.client_id:
+                logger.info(
+                    "[MCP-OAuth] Refresh abgelehnt: client=%s, gefunden=%s, client_match=%s",
+                    client.client_id, bool(row),
+                    bool(row and row.client_id == client.client_id),
+                )
                 return None
             return RefreshToken(
                 token=refresh_token,
