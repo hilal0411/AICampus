@@ -15,6 +15,7 @@ import logging
 import os
 import re
 from pathlib import Path
+from urllib.parse import quote
 
 # Logging konfigurieren
 logging.basicConfig(
@@ -500,11 +501,19 @@ for _r in _mcp_auth_routes:
 async def http_exception_handler(request: Request, exc: HTTPException):
     """401 → Redirect zur Login-Seite statt JSON-Fehler."""
     if exc.status_code == 401:
+        # Ziel-URL merken, damit es nach dem Login zurückgeht
+        # (Login/Signup selbst und API-Calls ausgenommen).
+        next_url = ""
+        if request.url.path not in ("/login", "/signup") and not request.url.path.startswith("/api/"):
+            next_url = request.url.path
+            if request.url.query:
+                next_url += f"?{request.url.query}"
+        login_url = f"/login?next={quote(next_url, safe='')}" if next_url else "/login"
         # HTMX-Requests: HX-Redirect Header (HTMX folgt automatisch)
         if "HX-Request" in request.headers:
             from fastapi.responses import Response
-            return Response(status_code=401, headers={"HX-Redirect": "/login"})
-        return RedirectResponse(url="/login", status_code=302)
+            return Response(status_code=401, headers={"HX-Redirect": login_url})
+        return RedirectResponse(url=login_url, status_code=302)
     from fastapi.responses import JSONResponse
     return JSONResponse(status_code=exc.status_code, content={"detail": exc.detail})
 
