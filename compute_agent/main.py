@@ -115,10 +115,21 @@ def workspaces_list(payload: dict = Depends(auth.verify_token)) -> dict:
     states = {w["key"]: w["state"] for w in docker_ops.list_workspaces()}
     out = []
     for key, info in REGISTRY.all_items():
+        mem = info.get("mem")
+        disk = info.get("disk")
         out.append({
             "key": key,
             "state": states.get(key, "absent"),
+            # Image aus dem gemeldeten Spec (Registry-Rebuild: erst per
+            # POST /workspaces nachgereicht → vorab "").
+            "image": (info.get("spec") or {}).get("image") or "",
             "last_activity": info["last_activity"],
+            # Reaper-Zyklus (10 s) je Workspace: RAM nur bei laufenden
+            # (docker stats), Disk immer (hostseitig am Volume, geht
+            # auch bei gestopptem Container). None = (noch) ungemessen.
+            "mem": mem.get("usage") if isinstance(mem, dict) else None,
+            "disk": disk.get("usage") if isinstance(disk, dict) else None,
+            "disk_quota_mb": disk.get("quota_mb") if isinstance(disk, dict) else None,
         })
     return {"workspaces": out}
 

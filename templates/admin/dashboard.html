@@ -982,6 +982,8 @@
   let computeEngines = [];     // [{name, url, key}] (env: true = .env/Compose-Engine)
   let envDefault = null;       // .env/Compose-Engine (aktiv, solange Liste leer)
   let engineStatus = {};       // name → {healthy, gpu, gpu_info, error, url}
+  let engineSessions = {};     // name → [{key, image, course, task, user}]
+  let sessionsLoaded = false;
   let globalSpecsCache = null;
 
   function escHtml(s) {
@@ -1044,6 +1046,95 @@
       }
     }
     renderEngineGpus(wrap.querySelector('.eng-gpus'), i, st);
+  }
+
+  // ─── Sessions je Engine (Chips in der Zeile + Listen im Details) ────
+  // Daten: GET /api/admin/compute/sessions (ein Call für alle Engines),
+  // gefüllt bei refreshEngineStatus() — beim Öffnen des Compute-Bereichs
+  // und pro „Status aktualisieren"/⟳. Pro Session: Kurs + Aufgabe +
+  // Student + Image, dazu RAM (aktiv) und Disk (aktiv + inaktiv; der
+  // Agent misst beides im 10-s-Zyklus, Disk hostseitig am Volume).
+  function fmtBytes(n) {
+    if (n == null || !isFinite(n)) { return ''; }
+    const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+    let i = 0, v = Number(n);
+    while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+    return (v >= 100 ? Math.round(v) : v.toFixed(1)) + ' ' + u[i];
+  }
+  function fmtLastActivity(ts) {
+    if (!ts) { return ''; }
+    const d = new Date(ts * 1000);
+    if (isNaN(d.getTime())) { return ''; }
+    return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+  }
+  function sessionUsageHtml(s) {
+    const parts = [];
+    if (s.active && s.mem != null) { parts.push('RAM ' + fmtBytes(s.mem)); }
+    if (s.disk != null) {
+      const q = s.disk_quota_mb ? ' / ' + fmtBytes(s.disk_quota_mb * 1024 * 1024) : '';
+      parts.push('Disk ' + fmtBytes(s.disk) + q);
+    }
+    if (!s.active) {
+      const la = fmtLastActivity(s.last_activity);
+      if (la) { parts.push('zuletzt ' + la); }
+    }
+    return parts.length ? '<span class="flex-shrink-0 text-gray-400 tabular-nums">' + parts.join(' · ') + '</span>' : '';
+  }
+  function sessionRowHtml(s) {
+    const who = escHtml(s.course) + ' · ' + escHtml(s.user || '?');
+    const whoTitle = escHtml(s.course + ' · ' + s.user);
+    return '<div class="px-1.5 py-1 rounded hover:bg-gray-100">' +
+      '<div class="flex items-baseline gap-2">' +
+      '<span class="flex-shrink-0 text-[10px]">' + (s.active ? '🟢' : '⏸') + '</span>' +
+      '<span class="truncate text-gray-700" title="' + escHtml(s.task) + '">' + escHtml(s.task || '(unbekannte Aufgabe)') + '</span>' +
+      '<span class="min-w-0 truncate text-gray-500" title="' + whoTitle + '">' + who + '</span>' +
+      sessionUsageHtml(s) +
+      '</div>' +
+      (s.image ? '<div class="pl-5 truncate text-[10px] font-mono text-gray-400" title="' + escHtml(s.image) + '">' + escHtml(s.image) + '</div>' : '') +
+      '</div>';
+  }
+  function renderEngineSessions(wrap) {
+    const name = wrap.dataset.name;
+    const sess = (name && engineSessions[name]) || [];
+    const active = sess.filter(s => s.active);
+    const idle = sess.filter(s => !s.active).sort((a, b) => (b.last_activity || 0) - (a.last_activity || 0));
+    const chip = wrap.querySelector('.eng-sess');
+    if (chip) {
+      chip.textContent = '▶ ' + active.length;
+      chip.title = active.length + (active.length === 1 ? ' aktive Session' : ' aktive Sessions') + ' auf dieser Engine';
+      chip.classList.toggle('hidden', !active.length);
+    }
+    const idleChip = wrap.querySelector('.eng-sess-idle');
+    if (idleChip) {
+      idleChip.textContent = '⏸ ' + idle.length;
+      idleChip.title = idle.length + (idle.length === 1 ? ' inaktive Session' : ' inaktive Sessions') + ' (gestoppt — Dateien bleiben auf der Disk)';
+      idleChip.classList.toggle('hidden', !idle.length);
+    }
+    const listEl = wrap.querySelector('.eng-sess-list');
+    if (!listEl) { return; }
+    if (!sessionsLoaded) { listEl.textContent = '…'; return; }
+    if (!sess.length) { listEl.textContent = 'Keine Sessions.'; return; }
+    listEl.innerHTML =
+      '<div class="text-[10px] uppercase tracking-wide text-gray-400 font-semibold mb-0.5">Aktiv (' + active.length + ')</div>' +
+      (active.length ? active.map(sessionRowHtml).join('') : '<div class="text-gray-400 px-1.5 py-0.5">Keine.</div>') +
+      '<div class="text-[10px] uppercase tracking-wide text-gray-400 font-semibold mt-2 mb-0.5">Inaktiv (' + idle.length + ')</div>' +
+      (idle.length ? idle.map(sessionRowHtml).join('') : '<div class="text-gray-400 px-1.5 py-0.5">Keine.</div>');
+  }
+
+  async function loadEngineSessions() {
+    try {
+      const res = await fetch('/api/admin/compute/sessions', { credentials: 'same-origin' });
+      if (!res.ok) { throw new Error(res.status); }
+      const data = await res.json();
+      engineSessions = {};
+      (data.agents || []).forEach(a => { engineSessions[a.name] = a.sessions || []; });
+      sessionsLoaded = true;
+    } catch (err) {
+      engineSessions = {};
+    }
+    const list = document.getElementById('compute-engine-list');
+    if (!list) { return; }
+    Array.from(list.children).forEach(wrap => renderEngineSessions(wrap));
   }
 
   // GPU-Regel je Engine (Checkboxen, Auto-Save): null/undefined = alle,
@@ -1135,6 +1226,8 @@
         (a.env ? '<span class="text-[9px] px-1 py-0.5 rounded bg-amber-100 text-amber-700 whitespace-nowrap flex-shrink-0" title="Wird von .env/Compose deklariert (COMPUTE_AGENT_URL) — gilt, solange die Engine-Liste leer ist">.env</span>' : '') +
         '<span class="eng-gpu hidden text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 whitespace-nowrap flex-shrink-0"></span>' +
         '<span class="eng-ver hidden text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 font-mono whitespace-nowrap flex-shrink-0"></span>' +
+        '<span class="eng-sess hidden text-[10px] px-1.5 py-0.5 rounded bg-sky-100 text-sky-700 whitespace-nowrap flex-shrink-0" title="Aktive Sessions"></span>' +
+        '<span class="eng-sess-idle hidden text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 whitespace-nowrap flex-shrink-0" title="Inaktive Sessions (Container gestoppt, Dateien bleiben auf der Disk)"></span>' +
         '<span class="ml-auto flex items-center gap-2 flex-shrink-0">' +
         '<button class="eng-test text-xs px-2 py-1 rounded border border-blue-200 text-blue-600 hover:bg-blue-50" title="Verbindung testen">🧪</button>' +
         '<svg class="eng-chevron h-5 w-5 text-gray-400 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>' +
@@ -1148,6 +1241,11 @@
         '<input class="eng-key w-full border border-gray-300 rounded px-2 py-1.5 text-xs font-mono" type="password" placeholder="HMAC-Key (leer = offen/Dev)" value="' + escHtml(a.key) + '"></div>' +
         '</div>' +
         '<div class="eng-gpus mb-3"></div>' +
+        '<div class="flex items-center justify-between mb-1">' +
+        '<span class="text-xs font-medium text-gray-600">Sessions (aktiv + inaktiv)</span>' +
+        '<button class="eng-sess-refresh px-1.5 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100" title="Sessions neu laden">⟳</button>' +
+        '</div>' +
+        '<div class="eng-sess-list border border-gray-200 rounded bg-gray-50 p-2 text-xs text-gray-500 min-h-[2rem] mb-3">…</div>' +
         '<div class="flex items-center justify-between mb-1">' +
         '<span class="text-xs font-medium text-gray-600">Images auf „' + escHtml(a.name || a.url) + '“</span>' +
         '<button class="eng-imgs-refresh px-1.5 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100" title="Images neu laden">⟳</button>' +
@@ -1182,6 +1280,7 @@
       };
       d.querySelector('.eng-test').onclick = () => testComputeEngine(i);
       d.querySelector('.eng-del').onclick = () => removeComputeEngine(i);
+      d.querySelector('.eng-sess-refresh').onclick = () => loadEngineSessions();
       d.querySelector('.eng-imgs-refresh').onclick = () => loadEngineImages(d, i);
       d.querySelector('.eng-imgs-add').onclick = () => installEngineImage(d, i);
       // Images lazy laden: erst beim ersten Aufklappen der Zeile
@@ -1190,6 +1289,7 @@
       });
       updateEngineSpecOptions(d, {});
       updateEngineStatus(d, a.name ? engineStatus[a.name] : null, i);
+      renderEngineSessions(d);
       list.appendChild(d);
     });
   }
@@ -1270,6 +1370,7 @@
       const a = computeEngines[i];
       updateEngineStatus(wrap, a && a.name ? engineStatus[a.name] : null, i);
     });
+    loadEngineSessions();
   }
 
   // ─── Images je Engine (im Dropdown der Engine-Zeile) ───────────

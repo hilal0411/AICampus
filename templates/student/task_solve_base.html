@@ -804,7 +804,12 @@
 
     {# Typ-spezifisches JS (LaTeX-Upload etc.): #}
     {# task_solve_text.html / task_solve_workspace.html #}
+    {# Nur wenn die Solution-Area gerendert wird — sonst referenziert das
+       JS auf nicht existierende Elemente (Deadline abgelaufen) und
+       bricht mit "Cannot read properties of null" ab. #}
+    {% if not deadline_expired(task.deadline) %}
     {% block solve_scripts %}{% endblock %}
+    {% endif %}
 
     {% if task.task_type == 'mc' %}
     // MC: Ergebnis-Karten der Historie farbcodiert rendern (wie nach

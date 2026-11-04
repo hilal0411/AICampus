@@ -777,19 +777,22 @@ def stop_container_soft(key: str) -> None:
 
 def list_workspaces() -> list[dict]:
     proc = _docker("ps", "-a", "--filter", "label=aicampus.ws",
-                   "--format", "{{.Labels}}\t{{.Status}}", check=False)
+                   "--format", "{{.Labels}}\t{{.State}}", check=False)
     out = []
     for line in proc.stdout.decode().splitlines():
         if "\t" not in line:
             continue
-        labels, status = line.split("\t", 1)
+        labels, state = line.split("\t", 1)
         key = None
         for part in labels.split(","):
             if part.startswith("aicampus.ws="):
                 key = part.split("=", 1)[1]
                 break
         if key:
-            out.append({"key": key, "state": status.split()[-1] if status else "?"})
+            # {{.State}} = sauberer Status (running/exited/created) —
+            # {{.Status}} wäre ein Menschentext ("Up 5 min") ohne
+            # maschinenlesbares State-Field.
+            out.append({"key": key, "state": state.strip() or "?"})
     return out
 
 

@@ -564,7 +564,8 @@ async def delete_task(
     task_title = task.title
     trash_service.soft_delete(session, task)
     # Live-Update: @task:-Referenzen in offenen Previews zeigen jetzt ❓.
-    notifications.push_content_updated(session, task_course_id, "task", int(task.id))
+    # (task_id aus dem Path — `task.id` wäre nach dem Commit expired)
+    notifications.push_content_updated(session, task_course_id, "task", task_id)
     sync_media_usages(session, task_course_id)
     return {"message": f"Aufgabe '{task_title}' in den Papierkorb gelegt."}
 
@@ -3695,6 +3696,21 @@ async def course_compute_engines(
     """
     _check_course_role(user, course_id, session)
     return workspace_service.status(session, course_id)
+
+
+@router.get("/courses/{course_id}/compute/sessions")
+async def course_compute_sessions(
+    course_id: int,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Laufende Workspace-Sessions des Kurses je Engine
+    (Aufgabe/Student/Image) — Kurs-Settings, Compute-Engine-Dropdown.
+
+    Read-only: PROF, TUTOR und Admin (wie /compute/engines).
+    """
+    _check_course_role(user, course_id, session)
+    return {"agents": workspace_service.engine_sessions(session, course_id)}
 
 
 class CourseComputeTestRequest(SQLModel):

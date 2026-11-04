@@ -141,16 +141,21 @@ def _check_disk_quota(key: str, info: dict) -> None:
     try:
         spec = info.get("spec") or {}
         quota_mb = spec.get("disk_quota_mb")
-        if not quota_mb:
-            REGISTRY.set_disk(key, None)
-            return
+        # ALLE Workspaces messen (nicht nur Quota-Task): die Engine-UI
+        # (Admin/Kurs-Settings) zeigt die Disk-Nutzung je Session.
         usage = docker_ops.workspace_disk_usage(
             key, spec.get("readonly_paths") or [])
-        over = usage > quota_mb * 1024 * 1024
-        hard = usage > int(quota_mb * config.QUOTA_KILL_FACTOR) * 1024 * 1024
         disk = dict(info.get("disk") or {})
         disk.update({"usage": usage, "quota_mb": quota_mb,
-                     "over": over, "hard": hard, "at": time.time()})
+                     "at": time.time()})
+        if not quota_mb:
+            # Kein Limit → kein over/hard-State (UI zeigt nur die Nutzung).
+            disk.update({"over": False, "hard": False, "killed_at": None})
+            REGISTRY.set_disk(key, disk)
+            return
+        over = usage > quota_mb * 1024 * 1024
+        hard = usage > int(quota_mb * config.QUOTA_KILL_FACTOR) * 1024 * 1024
+        disk.update({"over": over, "hard": hard})
         if hard:
             if docker_ops.container_state(key) == "running":
                 _note_runs_for_quota_kill(key, usage, quota_mb)

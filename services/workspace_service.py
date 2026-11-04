@@ -41,10 +41,12 @@ from config import (
 from database.base import engine
 from database.models import (
     ContentVersion,
+    Course,
     Task,
     TaskWorkspaceFile,
     TaskWorkspaceFolder,
     TaskWorkspaceOrder,
+    User,
     WorkspaceRun,
     WorkspaceRunStatus,
 )
@@ -717,6 +719,88 @@ class WorkspaceService:
             "gpu_enabled": self._gpu_enabled(session, course_id),
             "agents": agents,
         }
+
+    _WS_KEY_RE = re.compile(r"^ws-(\d+)-(\d+)-(\d+)$")
+    # States, die NIE laufen (neuer Agent: sauberes {{.State}})
+    _WS_STATE_NOT_RUNNING = {"exited", "created", "absent", "dead",
+                             "paused", "restarting", "removing"}
+
+    @classmethod
+    def _ws_running(cls, state) -> bool:
+        """Container läuft? Neuer Agent meldet {{.State}} (running/…);
+        ÄLTERE Agent-Builds melden das letzte Wort von {{.Status}}
+        („Up 5 minutes“ → „minutes“, „Exited (0) …“ → „ago“) — dort per
+        Ausschluss nähern (bis alle Engines das neue Agent-Image haben).
+        """
+        s = str(state or "").strip().lower()
+        if not s:
+            return False
+        if s in cls._WS_STATE_NOT_RUNNING:
+            return False
+        return not s.endswith("ago")
+
+    def engine_sessions(self, session: Session,
+                        course_id: Optional[int] = None) -> list[dict]:
+        """Live-Sessions je Engine (aktiv + inaktiv, inkl. RAM/Disk) —
+        für die Engine-Ansicht in Admin-Konsole/Kurs-Settings.
+
+        course_id=None → alle Kurse (Admin); sonst nur Sessions des
+        Kurses. Erreichbarkeit pro Engine aus dem Health-Cache
+        (30 s); unerreichbare Engines liefern leer statt Fehler.
+        """
+        agents = self.get_agents(session, course_id)
+        raw = []  # (agent_idx, entry, course_id, task_id, student_id)
+        for idx, a in enumerate(agents):
+            if self._agent_health(a) is None:
+                continue
+            try:
+                entries = self.client_for(a).list_workspaces()
+            except ComputeAgentError:
+                continue
+            for w in entries:
+                m = self._WS_KEY_RE.match(str(w.get("key") or ""))
+                if not m:
+                    continue
+                c, t, s = int(m.group(1)), int(m.group(2)), int(m.group(3))
+                if course_id is not None and c != course_id:
+                    continue
+                raw.append((idx, w, c, t, s))
+        # Namen in je EINEM Batch-Query (statt N+1)
+        task_ids = {t for _, _, _, t, _ in raw}
+        user_ids = {s for _, _, _, _, s in raw}
+        course_ids = {c for _, _, c, _, _ in raw}
+        tasks = ({t.id: t for t in session.exec(
+            select(Task).where(Task.id.in_(list(task_ids)))).all()}
+            if task_ids else {})
+        users = ({u.id: u for u in session.exec(
+            select(User).where(User.id.in_(list(user_ids)))).all()}
+            if user_ids else {})
+        courses = ({c.id: c for c in session.exec(
+            select(Course).where(Course.id.in_(list(course_ids)))).all()}
+            if course_ids else {})
+        out = []
+        for idx, a in enumerate(agents):
+            sessions = []
+            for aidx, w, c, t, s in raw:
+                if aidx != idx:
+                    continue
+                u = users.get(s)
+                sessions.append({
+                    "key": w.get("key"),
+                    "active": self._ws_running(w.get("state")),
+                    "image": w.get("image") or "",
+                    "course": courses[c].name if c in courses else "",
+                    "task": tasks[t].title if t in tasks else "",
+                    # student_id=0 = Tutor-Testlauf (kein User)
+                    "user": u.name if u else ("Tutor-Testlauf" if s == 0 else ""),
+                    # Bytes (None = Agent-Build meldet es nicht / ungemessen)
+                    "mem": w.get("mem"),
+                    "disk": w.get("disk"),
+                    "disk_quota_mb": w.get("disk_quota_mb"),
+                    "last_activity": w.get("last_activity"),
+                })
+            out.append({"name": a["name"], "sessions": sessions})
+        return out
 
     # ═══════════════════════════════════════════════════════════
     # Workspace des Studenten
