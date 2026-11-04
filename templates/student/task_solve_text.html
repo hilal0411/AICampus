@@ -54,7 +54,7 @@
                 <div id="latex-drop-zone" class="cursor-pointer" onclick="document.getElementById('latex-file-input').click()">
                   <div class="text-2xl mb-1">📸</div>
                   <p class="text-xs text-indigo-600 font-medium">Klicke oder ziehe ein Foto herein</p>
-                  <p class="text-xs text-gray-500">PNG, JPEG, WebP — max. 10 MB</p>
+                  <p class="text-xs text-gray-500">PNG, JPEG, WebP — max. 20 MB</p>
                 </div>
                 <input type="file" id="latex-file-input" accept="image/png,image/jpeg,image/webp" class="hidden" />
                 <input type="file" id="latex-camera-input" accept="image/*" capture="environment" class="hidden" />
@@ -596,15 +596,30 @@
       showPhotoMode();
     }
 
+    // Manche Mobilgeraete melden andere MIMEs (z. B. "image/jpg" oder leer) —
+    // deshalb loest ueber MIME ODER Dateiendung.
+    function imageMime(file) {
+      let t = (file.type || "").toLowerCase();
+      if (t === "image/jpg") t = "image/jpeg";
+      if (["image/png", "image/jpeg", "image/webp"].includes(t)) return t;
+      const ext = ((file.name || "").split(".").pop() || "").toLowerCase();
+      const byExt = { png: "image/png", jpg: "image/jpeg", jpeg: "image/jpeg", jpe: "image/jpeg", webp: "image/webp" };
+      return byExt[ext] || null;
+    }
+
+    const MAX_IMAGE_BYTES = 20 * 1024 * 1024;
+
     function handleFile(file) {
       // Validate
-      const allowedTypes = ["image/png", "image/jpeg", "image/webp"];
-      if (!allowedTypes.includes(file.type)) {
+      const mime = imageMime(file);
+      if (!mime) {
+        console.warn("latex-upload: abgelehnt (Format)", file.name, file.type, file.size);
         showToast("Nicht unterstuetztes Format. Verwende PNG, JPEG oder WebP.", "error");
         return;
       }
-      if (file.size > 10 * 1024 * 1024) {
-        showToast("Bild zu gross. Maximum sind 10 MB.", "error");
+      if (file.size > MAX_IMAGE_BYTES) {
+        console.warn("latex-upload: abgelehnt (Groesse)", file.name, file.type, file.size);
+        showToast("Bild zu gross. Maximum sind 20 MB.", "error");
         return;
       }
 
@@ -612,10 +627,14 @@
       const reader = new FileReader();
       reader.onload = (e) => {
         previewImg.src = e.target.result;
-        fileNameEl.textContent = file.name + " (" + (file.size / 1024).toFixed(0) + " KB)";
+        fileNameEl.textContent = file.name + " (" + (file.size / 1024 / 1024).toFixed(1) + " MB)";
         previewContainer.classList.remove("hidden");
         statusEl.innerHTML = "";
-        convertToLatex(e.target.result, file.type);
+        convertToLatex(e.target.result, mime);
+      };
+      reader.onerror = () => {
+        console.error("latex-upload: FileReader-Fehler", file.name, reader.error);
+        showToast("Bild konnte nicht eingelesen werden.", "error");
       };
       reader.readAsDataURL(file);
     }

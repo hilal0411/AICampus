@@ -36,6 +36,8 @@ from compute_agent.version import agent_version
 from config import (
     SUBMISSION_DIR,
     VERSION_SNAPSHOT_DIR,
+    WORKSPACE_BACKUP_DIR,
+    WORKSPACE_BACKUP_RETENTION_DAYS,
     WORKSPACE_DIR,
 )
 from database.base import engine
@@ -58,6 +60,72 @@ from services.compute_client import (
 
 MAX_LOG_CHARS = 1_000_000       # stdout/stderr-Truncation (WorkspaceRun)
 logger = logging.getLogger(__name__)
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Sleep-Backups (Workspace-Volumes, die beim Idle-Kill auf den Server
+# gewandert sind; Upload: api/agent_api.workspace_backup,
+# Restore: ensure_workspace → client.restore_volume)
+# ═══════════════════════════════════════════════════════════════════
+
+def workspace_backup_tar(key: str) -> Path:
+    return WORKSPACE_BACKUP_DIR / f"{key}.tar.gz"
+
+
+def delete_workspace_backup(key: str) -> None:
+    """Sleep-Backup (+Meta) eines Keys entfernen (Workspace-Reset,
+    Task-Delete). Fehlende Dateien sind ok."""
+    tar = workspace_backup_tar(key)
+    try:
+        tar.unlink(missing_ok=True)
+        tar.with_name(tar.name.replace(".tar.gz", ".json")).unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def delete_task_backups(course_id: int, task_id: int) -> None:
+    """Alle Sleep-Backups einer Aufgabe (alle Students)."""
+    pattern = f"ws-{course_id}-{task_id}-"
+    for tar in WORKSPACE_BACKUP_DIR.glob(f"{pattern}*.tar.gz"):
+        delete_workspace_backup(tar.name[:-len(".tar.gz")])
+
+
+def prune_workspace_backups(retention_days: Optional[int] = None) -> int:
+    """Backups löschen, die älter als Retention sind (Default 30 Tage
+    nach letzter Aktivität; Meta-`at` bzw. Datei-MTime als Stempel)."""
+    if retention_days is None:
+        retention_days = WORKSPACE_BACKUP_RETENTION_DAYS
+    cutoff = time.time() - retention_days * 86400
+    n = 0
+    for tar in WORKSPACE_BACKUP_DIR.glob("ws-*.tar.gz"):
+        at: Optional[float] = None
+        meta = tar.with_name(tar.name.replace(".tar.gz", ".json"))
+        if meta.exists():
+            try:
+                at = float(json.loads(meta.read_text()).get("at") or 0) or None
+            except (OSError, ValueError):
+                at = None
+        if at is None:
+            try:
+                at = tar.stat().st_mtime
+            except OSError:
+                continue
+        if at < cutoff:
+            delete_workspace_backup(tar.name[:-len(".tar.gz")])
+            n += 1
+    return n
+
+
+def prune_backup_loop(interval: float = 6 * 3600) -> None:
+    """Retention-Thread (Start in main.lifespan): alle 6 h einmal prüfen."""
+    while True:
+        try:
+            n = prune_workspace_backups()
+            if n:
+                logger.info("sleep-backup Retention: %d Backup(s) gelöscht", n)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("sleep-backup Retention fehlgeschlagen: %s", e)
+        time.sleep(interval)
 MAX_LLM_FILE_CHARS = 100_000    # je Datei im LLM-Grading-Kontext
 MAX_LLM_TOTAL_CHARS = 400_000   # gesamt im LLM-Grading-Kontext
 HEALTH_TTL = 30                 # Health-Cache (Sekunden)
@@ -798,6 +866,8 @@ class WorkspaceService:
                     "disk": w.get("disk"),
                     "disk_quota_mb": w.get("disk_quota_mb"),
                     "last_activity": w.get("last_activity"),
+                    # Sleep-Backup auf dem Server (Volume von der Engine weg)
+                    "backed_up": bool(w.get("slept")),
                 })
             out.append({"name": a["name"], "sessions": sessions})
         return out
@@ -857,10 +927,21 @@ class WorkspaceService:
                                engine_names=self.task_engine_names(task))
 
     def ensure_workspace(self, session: Session, task: Task,
-                         student_id: int) -> dict:
+                         student_id: int,
+                         starter_files: Optional[list[dict]] = None,
+                         first_restore_tar: Optional[Path] = None,
+                         hidden_folders: bool = False) -> dict:
         """Container sicherstellen (idempotent). Starter-Dateien (alle mit
         effektiver Klasse ✏️ edit) werden nur bei frischem Volume vom
-        Agenten geschrieben."""
+        Agenten geschrieben.
+
+        Review-Workspace: eigene `starter_files` übergeben (z. B. +👤 für
+        den Tutor) und `first_restore_tar` (Submission-Snapshot) — der
+        wird beim ERSTEN frischen Volume (kein Sleep-Backup vorhanden)
+        darüber gespielt, danach gilt der normale Sleep-Backup-Flow.
+        `hidden_folders`: 👤-Ordner in das frische Volume anlegen
+        (nur mit +👤-Starter-Dateien sinnvoll).
+        """
         agent = self.pick_task_agent(session, task)
         if agent is None:
             raise ComputeAgentUnavailable(
@@ -868,14 +949,60 @@ class WorkspaceService:
                     session, task.course_id, self.task_engine_names(task)))
         client = self.client_for(agent)
         key = workspace_key(task.course_id, task.id, student_id)
-        starter = self.starter_files(session, task)
-        folders = self.materialize_folders(session, task)
+        starter = (starter_files if starter_files is not None
+                   else self.starter_files(session, task))
+        folders = self.materialize_folders(
+            session, task, include_hidden=hidden_folders)
         spec = self.workspace_spec_for_agent(session, task, agent)
         result = client.create_workspace(key, spec,
-                                         starter_files=starter or None,
-                                         folders=folders or None)
+                                          starter_files=starter or None,
+                                          folders=folders or None)
+        if result.get("fresh"):
+            # Sleep-Backup (bestehender Stand) gewinnt; sonst (Erststart)
+            # der First-Restore (Review: der Submission-Snapshot).
+            result["restored"] = self._restore_backup_if_any(client, key)
+            if not result["restored"] and first_restore_tar \
+                    and first_restore_tar.is_file():
+                self._restore_tar_to_workspace(
+                    client, key, first_restore_tar,
+                    "die eingereichte Lösung ist unverändert erhalten")
+                result["restored"] = True
         result["agent"] = agent["name"]
         return result
+
+    @staticmethod
+    def _restore_tar_to_workspace(client: ComputeClient, key: str,
+                                  tar: Path, safe_hint: str) -> None:
+        """tar.gz in das frische Volume entpacken (darüber liegen nur die
+        Starter-Dateien — der Restore gewinnt).
+
+        Bei Fehlschlag wird der Workspace zurückgerollt (Container +
+        Volume weg) — der nächste Status-Call startet fresh=true und
+        wiederholt den Restore. Die Quelldatei bleibt erhalten."""
+        try:
+            data = tar.read_bytes()
+            client.restore_volume(key, data)
+            logger.info("workspace %s: %s wiederhergestellt (%d bytes)",
+                        key, tar.name, len(data))
+        except ComputeAgentError as e:
+            try:
+                client.delete_workspace(key)
+            except ComputeAgentError:
+                pass
+            raise ComputeAgentError(
+                f"Arbeitsstand konnte nicht wiederhergestellt werden: "
+                f"{e.message} — Seite neu laden ({safe_hint}).", 500) from e
+
+    @classmethod
+    def _restore_backup_if_any(cls, client: ComputeClient, key: str) -> bool:
+        """Sleep-Backup in das frische Volume zurückspielen (Student kommt
+        zurück nach einem Idle-Sleep)."""
+        tar = workspace_backup_tar(key)
+        if not tar.is_file():
+            return False
+        cls._restore_tar_to_workspace(
+            client, key, tar, "das Backup ist auf dem Server sicher")
+        return True
 
     def workspace_spec_for_agent(self, session: Session, task: Task,
                                  agent: dict) -> dict:
@@ -1614,6 +1741,7 @@ class WorkspaceService:
     def on_task_deleted(self, session: Session, task: Task) -> None:
         """Task-Entfernung: Agent-Ressourcen + lokale Dateien aufräumen."""
         self._cleanup_workspace_assets(session, task)
+        delete_task_backups(task.course_id, task.id)
         # Version-Snapshots der Aufgabe entfernen
         for v in session.exec(
             select(ContentVersion)
@@ -1929,6 +2057,51 @@ class WorkspaceService:
     def grading_key(task: Task, submission_id: int) -> str:
         """Einweg-Workspace je Einreichung (student_id=Submission-Id → kollisionsfrei)."""
         return workspace_key(task.course_id, task.id, submission_id)
+
+    # Reservierter Student-Bereich für Review-Workspaces (1M + Submission-Id):
+    # kollidiert mit keinen echten User-IDs (0 = Tutor-Testlauf).
+    REVIEW_KEY_OFFSET = 1_000_000
+
+    @classmethod
+    def review_key(cls, task: Task, submission_id: int) -> str:
+        """Review-Workspace je Einreichung: die eingereichte Lösung wird
+        hier live ausgeführt (Tutor-Review / Klausurvorbereitung).
+        Separater Key → die Live-Workspaces und die Snapshots bleiben
+        unangetastet."""
+        return workspace_key(task.course_id, task.id,
+                             cls.REVIEW_KEY_OFFSET + submission_id)
+
+    def review_starter_files(self, session: Session, task: Task,
+                             include_hidden: bool = False) -> list[dict]:
+        """Starter-Dateien des Review-Containers: ✏️-Dateien der Aufgabe
+        (+ 👤-Dateien, nur für Tutor/Prof — private Tests lassen sich so
+        interaktiv ausführen). Der eigentliche Lösungszustand kommt
+        danach per tar-Restore des Submission-Snapshots (ensure_workspace
+        mit first_restore_tar)."""
+        files = self.starter_files(session, task)
+        if include_hidden:
+            seen = {f["path"] for f in files}
+            for e in self._hidden_injection_files(session, task):
+                if e["path"] not in seen:
+                    files.append(e)
+                    seen.add(e["path"])
+        return files
+
+    @staticmethod
+    def delete_review_workspace(session: Session, task: Task,
+                                submission_id: int) -> None:
+        """Review-Workspace räumen: Volume/Container auf der Engine +
+        Sleep-Backup auf dem Server (beide sind wegwerfbar — der
+        Zustand kommt aus dem Submission-Snapshot)."""
+        key = WorkspaceService.review_key(task, submission_id)
+        delete_workspace_backup(key)
+        agent = workspace_service.pick_task_agent(session, task)
+        if agent is None:
+            return
+        try:
+            workspace_service.client_for(agent).delete_workspace(key)
+        except ComputeAgentError:
+            pass  # war schon weg
 
     def _private_init_artifact_entries(self, session: Session,
                                        task: Task) -> list[dict]:

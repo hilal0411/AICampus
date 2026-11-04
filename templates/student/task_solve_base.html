@@ -255,54 +255,26 @@
               {% if not sub.solution and not sub.workspace_snapshot and not sub.upload_file and not sub.mc_result %}
               <p class="text-gray-400 text-sm italic">Keine Einreichung — diese Bewertung wurde manuell vom Tutor/Prof vergeben.</p>
               {% elif task.task_type == 'workspace' %}
-                {% if sub.workspace_snapshot %}
-                <div class="text-sm bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-lg p-3 mb-3">
-                  📦 Workspace-Abgabe (Snapshot des Containers: {{ (sub.solution or 'deine Dateien') }})
-                  <span class="block text-xs text-indigo-500 mt-0.5">
-                    Read-only — Stand zum Einreichzeitpunkt
-                  </span>
-                </div>
-                <!-- Read-only Workspace (gleiche Komponente wie Live-IDE,
-                     ohne Terminals/Ports/Schreibrechte; Snapshot = unveränderbar) -->
-                <div class="ws-tree-editor-wrap flex flex-col sm:flex-row h-[540px] sm:h-[420px] border border-gray-200 rounded-lg overflow-hidden bg-white">
-                  <div class="flex flex-col h-[220px] sm:h-auto sm:w-56 shrink-0 border-b sm:border-b-0 sm:border-r border-gray-200 bg-gray-50">
-                    <div class="flex items-center gap-1 p-1.5 border-b border-gray-200 bg-gray-100">
-                      <span class="text-[11px] text-gray-500 truncate flex-1">Dateien zum Einreichzeitpunkt</span>
-                      <button type="button" id="ws-files-fullscreen-btn" title="Vollbild" class="ws-tree-btn">⛶</button>
-                    </div>
-                    <div id="ws-sub-{{ sub.id }}-tree" class="flex-1 min-h-0 overflow-y-auto p-1 text-sm">
-                      <div class="text-gray-400 text-xs p-1">Dateien werden geladen …</div>
-                    </div>
-                  </div>
-                  <div id="ws-split-handle" class="ws-split-handle"
-                       role="separator"
-                       title="Ziehen: Baum/Editor vergrößern · Doppelklick: Standardgröße"></div>
-                  <div class="flex-1 min-h-0">
-                    <div class="ws-editor w-full h-full min-h-0">
-                      <textarea id="ws-sub-{{ sub.id }}-editor" class="w-full h-full font-mono text-sm" spellcheck="false"
-                                placeholder="Datei links auswählen, um sie anzusehen …"></textarea>
-                      <div id="ws-sub-{{ sub.id }}-media" class="hidden h-full"></div>
-                    </div>
-                  </div>
-                </div>
-                <script>
-                  (function () {
-                    var t = document.getElementById("ws-sub-{{ sub.id }}-tree");
-                    var e = document.getElementById("ws-sub-{{ sub.id }}-editor");
-                    var m = document.getElementById("ws-sub-{{ sub.id }}-media");
-                    if (!t || !e || !window.WorkspaceUI) return;
-                    var ui = WorkspaceUI.init({
-                      treeEl: t,
-                      editorEl: e,
-                      mediaEl: m,
-                      apiBase: "/api/student/submissions/{{ sub.id }}/workspace",
-                      readOnlyCheck: function () { return true; },
-                      emptyMsg: "(keine Dateien in dieser Abgabe)",
-                    });
-                    ui.refresh();  // init lädt keine Dateien selbst
-                  })();
-                </script>
-                {% else %}
+                 {% if sub.workspace_snapshot %}
+                 {# Eingebettete Review-IDE (Multi-Instance per ws_inst):
+                    Cold-State (noch kein Container) zeigt die
+                    Snapshot-Dateien read-only; ▶ Starten legt den
+                    Review-Container aus dem Snapshot an. #}
+                 {% set ws_inst = "sub" ~ sub.id %}
+                 {% set ws_api = "/api/review/tasks/" ~ task.id ~ "/submissions/" ~ sub.id ~ "/workspace" %}
+                 {% set ws_title = "" %}
+                 {% set ws_review_id = sub.id %}
+                 {% set ws_auto_start = false %}
+                 {% set ws_show_timer = false %}
+                 {% set ws_show_grading = false %}
+                 {% set ws_show_submit = false %}
+                 {% set ws_reset_label = "↺ Zur Einreichung zurücksetzen" %}
+                 {% set ws_reset_title = "Auf den eingereichten Stand zurücksetzen (Änderungen in der Nachberechnung gehen verloren!)" %}
+                 {% include "partials/workspace_ide.html" %}
+                 <script>
+                 {% include "partials/workspace_ide_scripts.html" %}
+                 </script>
+                 {% else %}
                 <p class="text-gray-400 text-sm italic">Kein Snapshot erhalten.</p>
                 {% endif %}
               {% elif task.task_type == 'upload' %}
@@ -545,6 +517,30 @@
   // Global für den Markdown-Renderer (kursweite Querverweise ins Skript).
   const courseId = {{ course.id }};
   const taskId = {{ task.id }};
+  {% if task.task_type == 'workspace' %}
+  // Review-IDE-Fragment (server-rendered) für die dynamische Neue-
+  // Abgabe-Karte laden und einbauen (Markup + IIFE-Skript).
+  async function loadWsFrag(el) {
+    if (!el || el.dataset.wsFragDone) return;
+    el.dataset.wsFragDone = "1";
+    try {
+      const [m, s] = await Promise.all([
+        fetch(el.dataset.wsFragUrl + '&part=markup').then(r => r.ok ? r.text() : null),
+        fetch(el.dataset.wsFragUrl + '&part=script').then(r => r.ok ? r.text() : null),
+      ]);
+      if (!m || !s) throw new Error('Fragment nicht verfügbar');
+      el.textContent = '';
+      el.className = '';  // p-4-Platzhalter-Stil weg → IDE ist vollbreit
+      el.insertAdjacentHTML('beforeend', m);
+      const sc = document.createElement('script');
+      sc.textContent = s;
+      document.body.appendChild(sc);
+    } catch (e) {
+      console.warn('Review-IDE-Fragment:', e);
+      el.textContent = 'Review-IDE konnte nicht geladen werden.';
+    }
+  }
+  {% endif %}
 
   // ─── Live-Update (MCP): Aufgabe extern bearbeitet → Hinweis ───
   // Kein Auto-Reload: Der Student könnte mitten in der Antwort-Eingabe
@@ -1362,25 +1358,20 @@
         ? '<div class="solution-container"><template class="markdown-mc" type="application/json" data-raw="' + encodeURIComponent(JSON.stringify(data.mc_result)) + '"></template></div>'
         : '<div class="solution-container"><template class="markdown-solution" type="application/json" data-raw="' + solutionJson + '"></template></div>';
       {% elif task.task_type in ('workspace', 'upload') %}
-      // Workspace: eingebettete read-only Snapshot-Ansicht (gleiche
-      // Komponente wie die Live-IDE, ohne Terminals/Ports/Schreibrechte);
+      // Workspace: eingebettete Review-IDE (server-rendered Fragment,
+      // Cold-State; ▶ Starten = Container aus Snapshot);
       // Upload: read-only Datei-Ansicht der eingereichten Datei (gleiche
       // Komponente, andere API).
+      {% if task.task_type == 'upload' %}
       solutionHtml =
         '<div class="text-sm bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-lg p-3 mb-3">' +
-        {% if task.task_type == 'upload' %}
         '📤 Eingereichte Datei: ' + escapeHtml(submittedText) +
-        {% else %}
-        '📦 Workspace-Abgabe (Snapshot des Containers: ' + escapeHtml(submittedText) + ')' +
-        {% endif %}
         '<span class="block text-xs text-indigo-500 mt-0.5">Read-only — Stand zum Einreichzeitpunkt</span>' +
         '</div>' +
-        {% if task.task_type == 'upload' %}
         '<div class="mb-2">' +
         '<a href="/api/tasks/' + taskId + '/submissions/' + submissionId + '/upload/download" ' +
         'class="text-blue-700 hover:text-blue-900 border border-blue-300 hover:border-blue-500 px-3 py-1.5 rounded-lg text-sm transition inline-flex items-center gap-1.5">⬇️ Datei herunterladen</a>' +
         '</div>' +
-        {% endif %}
         '<div class="ws-tree-editor-wrap flex flex-col sm:flex-row h-[540px] sm:h-[420px] border border-gray-200 rounded-lg overflow-hidden bg-white">' +
         '<div class="flex flex-col h-[220px] sm:h-auto sm:w-56 shrink-0 border-b sm:border-b-0 sm:border-r border-gray-200 bg-gray-50">' +
         '<div class="flex items-center gap-1 p-1.5 border-b border-gray-200 bg-gray-100">' +
@@ -1399,6 +1390,12 @@
         '</div>' +
         '</div>' +
         '</div>';
+      {% else %}
+      solutionHtml =
+        '<div class="p-4 text-sm text-gray-400 italic" ' +
+        'data-ws-frag-url="/api/review/tasks/' + taskId + '/submissions/' + submissionId + '/workspace/ide?inst=dyn' + submissionId + '">' +
+        'Review-IDE wird geladen …</div>';
+      {% endif %}
       {% else %}
       solutionHtml = '<div class="solution-container"><template class="markdown-solution" type="application/json" data-raw="' + solutionJson + '"></template></div>';
       {% endif %}
@@ -1490,8 +1487,8 @@
         });
       }
 
-      {% if task.task_type in ('workspace', 'upload') %}
-      // Read-only Ansicht in der neuen Karte laden
+      {% if task.task_type == 'upload' %}
+      // Read-only Datei-Ansicht in der neuen Karte laden
       // (insertAdjacentHTML führt <script> nicht aus → init direkt rufen;
       // init lädt keine Dateien selbst, refresh() ist nötig)
       if (newCard && window.WorkspaceUI) {
@@ -1503,16 +1500,17 @@
             treeEl: wsTree,
             editorEl: wsEditor,
             mediaEl: wsMedia,
-            apiBase: {% if task.task_type == 'upload' %}
-              '/api/submissions/' + submissionId + '/upload'
-            {% else %}
-              '/api/student/submissions/' + submissionId + '/workspace'
-            {% endif %},
+            apiBase: '/api/submissions/' + submissionId + '/upload',
             readOnlyCheck: function () { return true; },
             emptyMsg: '(keine Dateien in dieser Abgabe)',
           });
           wsUi.refresh();
         }
+      }
+      {% elif task.task_type == 'workspace' %}
+      // Review-IDE-Fragment in der neuen Karte laden (server-rendered)
+      if (newCard && window.loadWsFrag) {
+        loadWsFrag(newCard.querySelector('[data-ws-frag-url]'));
       }
       {% endif %}
 

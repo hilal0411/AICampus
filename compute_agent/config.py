@@ -27,6 +27,11 @@ AGENT_KEY: str = os.getenv("AGENT_KEY", "")
 # 0.0.0.0 IM CONTAINER; die Sicherheit bleibt über den Docker-Netz-
 # Access (kein Port aufs Host-Netz, außer bewusst publishen).
 HOST: str = os.getenv("AGENT_HOST", "127.0.0.1")
+# AICampus-Callback-URL für Sleep-Backups (s. backup.py): beim Idle-Kill
+# wird das Workspace-Volume hierher hochgeladen und danach gelöscht.
+# Leer = Sleep-Backup inaktiv (altes Verhalten: Volume bleibt auf der
+# Engine). Der Agent nutzt dafür seinen eigenen AGENT_KEY als HMAC.
+AICAMPUS_URL: str = os.getenv("AICAMPUS_URL", "").strip()
 PORT: int = int(os.getenv("AGENT_PORT", "8700"))
 # Preview-Tunnel (raw asyncio, s. preview.py): nur über das Compose-Netz
 # erreichbar (KEIN Host-Publish); einziger Client ist der AICampus-

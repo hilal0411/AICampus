@@ -204,6 +204,14 @@ class ComputeClient:
                              task_id=task, student_id=student, timeout=120)
         return resp.json()
 
+    def restore_volume(self, key: str, data: bytes) -> dict:
+        """Sleep-Backup (tar.gz) in das (frische) Volume entpacken."""
+        course, task, student = _key_parts(key)
+        resp = self._request("POST", f"/workspaces/{key}/restore", op=f"ws:{key}",
+                             task_id=task, student_id=student,
+                             bytes_body=data, timeout=600)
+        return resp.json()
+
     def start_workspace(self, key: str) -> dict:
         """Expliziter Container-Start (hebt Stop- Sperre)."""
         course, task, student = _key_parts(key)

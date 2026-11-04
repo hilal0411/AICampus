@@ -181,7 +181,10 @@
 
 {% block extra_head %}
 <link rel="stylesheet" href="{{ asset('css/workspace.css') }}">
+<link rel="stylesheet" href="{{ asset('vendor/xterm/css/xterm.css') }}">
 <script src="{{ asset('js/workspace.js') }}"></script>
+<script src="{{ asset('vendor/xterm/js/xterm.js') }}"></script>
+<script src="{{ asset('vendor/xterm/js/addon-fit.js') }}"></script>
 <style>
   :root {
     --navbar-height: 60px;
@@ -536,47 +539,15 @@
       var isEmptySub = !sub.solution && !sub.upload_file && !sub.workspace_snapshot && !sub.mc_result;
 
       if (isWorkspace) {
-        // Read-only Snapshot-Ansicht (gleiche Komponente wie die
-        // Studentenseite; ohne Terminals/Ports/Schreibrechte)
-        var wsBox = document.createElement('div');
-        wsBox.className = 'text-sm bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-lg p-3 mb-3';
-        wsBox.innerHTML = '📦 Workspace-Abgabe (Snapshot des Containers: ' + escapeHtml(sub.solution || 'deine Dateien') + ')' +
-          '<span class="block text-xs text-indigo-500 mt-0.5">Read-only — Stand zum Einreichzeitpunkt</span>';
-        solSection.appendChild(wsBox);
-
+        // Eingebettete Review-IDE (server-rendered Fragment, Cold-State;
+        // ▶ Starten legt den Container aus dem Snapshot an)
         if (sub.workspace_snapshot) {
-          var wsWrap = document.createElement('div');
-          wsWrap.className = 'ws-tree-editor-wrap flex flex-col sm:flex-row h-[540px] sm:h-[420px] border border-gray-200 rounded-lg overflow-hidden bg-white';
-          wsWrap.innerHTML =
-            '<div class="flex flex-col h-[220px] sm:h-auto sm:w-56 shrink-0 border-b sm:border-b-0 sm:border-r border-gray-200 bg-gray-50">' +
-            '<div class="flex items-center gap-1 p-1.5 border-b border-gray-200 bg-gray-100">' +
-            '<span class="text-[11px] text-gray-500 truncate flex-1">Dateien zum Einreichzeitpunkt</span>' +
-            '<button type="button" id="ws-files-fullscreen-btn" title="Vollbild" class="ws-tree-btn">⛶</button>' +
-            '</div>' +
-            '<div id="ws-sub-' + sub.id + '-tree" class="flex-1 min-h-0 overflow-y-auto p-1 text-sm">' +
-            '<div class="text-gray-400 text-xs p-1">Dateien werden geladen …</div>' +
-            '</div>' +
-            '</div>' +
-            '<div id="ws-split-handle" class="ws-split-handle" role="separator" title="Ziehen: Baum/Editor vergrößern · Doppelklick: Standardgröße"></div>' +
-            '<div class="flex-1 min-h-0">' +
-            '<div class="ws-editor w-full h-full min-h-0">' +
-            '<textarea id="ws-sub-' + sub.id + '-editor" class="w-full h-full font-mono text-sm" spellcheck="false" placeholder="Datei links auswählen, um sie anzusehen …"></textarea>' +
-            '<div id="ws-sub-' + sub.id + '-media" class="hidden h-full"></div>' +
-            '</div>' +
-            '</div>' +
-            '</div>';
-          solSection.appendChild(wsWrap);
-          if (window.WorkspaceUI) {
-            var wsUi = WorkspaceUI.init({
-              treeEl: wsWrap.querySelector('#ws-sub-' + sub.id + '-tree'),
-              editorEl: wsWrap.querySelector('#ws-sub-' + sub.id + '-editor'),
-              mediaEl: wsWrap.querySelector('#ws-sub-' + sub.id + '-media'),
-              apiBase: '/api/student/submissions/' + sub.id + '/workspace',
-              readOnlyCheck: function () { return true; },
-              emptyMsg: '(keine Dateien in dieser Abgabe)',
-            });
-            wsUi.refresh();
-          }
+          var fragWrap = document.createElement('div');
+          fragWrap.className = 'p-4 text-sm text-gray-400 italic';
+          fragWrap.dataset.wsFragUrl = '/api/review/tasks/' + taskId + '/submissions/' + sub.id + '/workspace/ide?inst=tut' + sub.id;
+          fragWrap.textContent = 'Review-IDE wird geladen …';
+          solSection.appendChild(fragWrap);
+          if (window.loadWsFrag) loadWsFrag(fragWrap);
         } else {
           var noSnap = document.createElement('p');
           noSnap.className = 'text-gray-400 text-sm italic';
@@ -1081,6 +1052,30 @@
       day: '2-digit', month: '2-digit', year: 'numeric',
       hour: '2-digit', minute: '2-digit',
     });
+  }
+  // Review-IDE-Fragment (server-rendered) laden und einbauen
+  // (Markup + IIFE-Skript; insertAdjacentHTML führt <script> nicht
+  // aus → Skript per Element-Insert ausführen).
+  async function loadWsFrag(el) {
+    if (!el || el.dataset.wsFragDone) return;
+    el.dataset.wsFragDone = '1';
+    try {
+      var url = el.dataset.wsFragUrl;
+      var res = await Promise.all([
+        fetch(url + '&part=markup').then(function (r) { return r.ok ? r.text() : null; }),
+        fetch(url + '&part=script').then(function (r) { return r.ok ? r.text() : null; }),
+      ]);
+      if (!res[0] || !res[1]) throw new Error('Fragment nicht verfügbar');
+      el.textContent = '';
+      el.className = '';  // p-4-Platzhalter-Stil weg → IDE ist vollbreit
+      el.insertAdjacentHTML('beforeend', res[0]);
+      var sc = document.createElement('script');
+      sc.textContent = res[1];
+      document.body.appendChild(sc);
+    } catch (e) {
+      console.warn('Review-IDE-Fragment:', e);
+      el.textContent = 'Review-IDE konnte nicht geladen werden.';
+    }
   }
 
   function escapeHtml(str) {

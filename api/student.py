@@ -47,6 +47,7 @@ from services.settings_resolver import get_effective_llm_config
 from services.task_filter import multi_keyword_matches
 from services.workspace_service import (
     MAX_FILE_BYTES,
+    delete_workspace_backup,
     effective_file_access,
     effective_folder_access,
     file_disk_path,
@@ -2230,6 +2231,9 @@ async def workspace_reset(
         await asyncio.to_thread(client.delete_workspace, key)
     except ComputeAgentError as e:
         raise _agent_http(e)
+    # Sleep-Backup mit entfernen — sonst würde es beim nächsten
+    # frischen Workspace den bewusst zurückgesetzten Stand wiederbeleben.
+    delete_workspace_backup(key)
     return {"ok": True}
 
 

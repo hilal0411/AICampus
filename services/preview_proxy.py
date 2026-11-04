@@ -43,7 +43,7 @@ import secrets
 import struct
 import time
 from datetime import timedelta
-from urllib.parse import parse_qsl, quote, urlsplit
+from urllib.parse import parse_qsl, quote, urlencode, urlsplit
 
 from fastapi import APIRouter, Query, Request, WebSocket
 from fastapi.responses import JSONResponse, RedirectResponse, StreamingResponse
@@ -195,28 +195,37 @@ def _parse_preview_path(rest: str, query: str) -> tuple[int | None, str]:
 # fehlt auf der fremden Domain initially → Handoff-Ticket (One-Shot,
 # s. preview_handoff) setzt ihn beim ersten Besuch.
 
-_LABEL_RE = re.compile(r"^(\d{1,9})-(\d{1,5})-(\d{1,9})-([0-9a-f]{6})$")
+# Review-Labels: …-r<submission>-<h6> — das Review-Ziel ist Teil der
+# Subdomain selbst, damit ALLE Requests darauf (auch App-interne
+# XHR/WebSocket ohne Query) auf den Review-Workspace routen.
+_LABEL_RE = re.compile(
+    r"^(\d{1,9})-(\d{1,5})-(\d{1,9})(?:-r(\d{1,9}))?-([0-9a-f]{6})$")
 _TICKET_TTL = 60  # Sekunden (Handoff-Ticket)
 _used_tickets: dict[str, float] = {}  # jti → Ablauf (One-Shot)
 
 
-def _label_h6(task_id: int, port: int, user_id: int) -> str:
+def _label_h6(task_id: int, port: int, user_id: int,
+              review: int | None = None) -> str:
     """24-Bit-Tag aus dem SECRET (Label praktisch unerraten; Auth
     bleibt der Cookie — das Tag verhindert nur, dass beliebige
     Subdomains auf Workspaces routen)."""
+    rv = f":r{review}" if review is not None else ""
     return hashlib.sha256(
-        f"{SECRET_KEY}|preview-subdomain|{task_id}:{port}:{user_id}"
+        f"{SECRET_KEY}|preview-subdomain|{task_id}:{port}:{user_id}{rv}"
         .encode()).hexdigest()[:6]
 
 
-def preview_label(task_id: int, port: int, user_id: int) -> str:
-    """Stabiles Subdomain-Label für (Task, Port, User)."""
-    return f"{task_id}-{port}-{user_id}-{_label_h6(task_id, port, user_id)}"
+def preview_label(task_id: int, port: int, user_id: int,
+                  review: int | None = None) -> str:
+    """Stabiles Subdomain-Label für (Task, Port, User[, Review])."""
+    return (f"{task_id}-{port}-{user_id}"
+            + (f"-r{review}" if review is not None else "")
+            + f"-{_label_h6(task_id, port, user_id, review)}")
 
 
 def _parse_label_host(host: str):
-    """Host (ohne Port) → (task, port, user, h6) bei Preview-Subdomain,
-    sonst None."""
+    """Host (ohne Port) → (task, port, user, h6, review) bei
+    Preview-Subdomain, sonst None (review=None = Live-Workspace)."""
     if not PREVIEW_BASE_DOMAIN:
         return None
     suffix = "." + PREVIEW_BASE_DOMAIN
@@ -225,7 +234,8 @@ def _parse_label_host(host: str):
     m = _LABEL_RE.match(host[: -len(suffix)])
     if not m:
         return None
-    return int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(4)
+    return (int(m.group(1)), int(m.group(2)), int(m.group(3)), m.group(5),
+            int(m.group(4)) if m.group(4) else None)
 
 
 def _query_param(query_b: bytes, name: str) -> str:
@@ -316,8 +326,9 @@ class PreviewSubdomainMiddleware:
         if parsed is None:
             await self.app(scope, receive, send)
             return
-        task_id, port, user_id, h6 = parsed
-        if not hmac.compare_digest(_label_h6(task_id, port, user_id), h6):
+        task_id, port, user_id, h6, review_id = parsed
+        if not hmac.compare_digest(
+                _label_h6(task_id, port, user_id, review_id), h6):
             # Unbekannte Subdomain: keine Details leaksen
             if scope["type"] == "http":
                 await _error_page(404, "Unbekannte Preview.")(scope, receive, send)
@@ -365,6 +376,17 @@ class PreviewSubdomainMiddleware:
                 return
 
         rest = f"{port}/{path.lstrip('/')}"
+        if review_id is not None:
+            # Review-Label → review-Param in die Query injizieren; die
+            # Routen (_split_review) picken ihn auf und filtern ihn vor
+            # dem Weiterleiten heraus. Das Label ist Authorität
+            # (HMAC-verifiziert) — bereits vorhandene review-Params
+            # werden ersetzt.
+            qs = parse_qsl(scope.get("query_string") or b"",
+                           keep_blank_values=True)
+            qs = [(k, v) for k, v in qs if k != "review"]
+            qs.append(("review", str(review_id)))
+            scope["query_string"] = urlencode(qs).encode("latin-1")
         if scope["type"] == "http":
             response = await preview_http(
                 task_id, rest, Request(scope, receive),
@@ -519,8 +541,36 @@ class _ChunkedDecoder:
 
 # ── Auth + Routing (sync, läuft im Executor) ──────────────────────
 
+def _split_review(query: str) -> tuple[int | None, str]:
+    """Preview-Query splitten in (review_submission_id, Forwarded-Query).
+
+    review=<id>: Vorschau aus dem REVIEW-Workspace dieser Einreichung
+    (Path-Modus: vom Browser; Subdomain-Modus: vom Middleware aus dem
+    Review-Label injiziert). Der Parameter wird vor dem Weiterleiten
+    aus dem Query herausgefiltert — die gepreviewte App soll ihn nicht
+    sehen.
+    """
+    review = None
+    kept = []
+    for k, v in parse_qsl(query or "", keep_blank_values=True):
+        if k == "review" and review is None:
+            review = v
+        else:
+            kept.append((k, v))
+    if review is None:
+        return None, urlencode(kept)
+    try:
+        review_id = int(review)
+    except ValueError:
+        raise _AuthError(400, "Ungültiger review-Parameter.")
+    if review_id <= 0:
+        raise _AuthError(400, "Ungültiger review-Parameter.")
+    return review_id, urlencode(kept)
+
+
 def _resolve_sync(task_id: int, token: str,
-                  trusted_user_id: int | None = None):
+                  trusted_user_id: int | None = None,
+                  review_submission_id: int | None = None):
     """Cookie-Auth + Task/Course-Check + Agent-Pick.
 
     trusted_user_id ersetzt die Cookie-Auth durch den Label-User
@@ -528,11 +578,16 @@ def _resolve_sync(task_id: int, token: str,
     Fetches ohne Datencharakter (PWA-Manifest, s. Middleware). Die
     Task/Course-Mitgliedschaft wird auch dann geprüft.
 
+    review_submission_id: Preview aus dem Review-Workspace (separater
+    Workspace je Einreichung). Zugriff wie im Review-Workspace: Student
+    nur eigene Einreichung, sonst PROF/Tutor/Global-Admin.
+
     Liefert (agent_url, agent_key, workspace_key, user_id);
     None = degraded (503); wirft _AuthError bei 4xx.
     """
     from database.base import Session, engine
-    from database.models import Task, User, UserCourse, CourseRole
+    from database.models import (GlobalUserRole, Submission, Task, User,
+                                 UserCourse, CourseRole)
     from services import auth_service
     from services.workspace_service import workspace_key, workspace_service
 
@@ -569,17 +624,31 @@ def _resolve_sync(task_id: int, token: str,
         agent = workspace_service.pick_task_agent(session, task)
         if agent is None:
             return None
-        key = workspace_key(task.course_id, task.id, user.id)
+        if review_submission_id is not None:
+            submission = session.get(Submission, review_submission_id)
+            if submission is None or submission.task_id != task.id:
+                raise _AuthError(404, "Einreichung nicht gefunden.")
+            if submission.student_id != user.id:
+                if not (user.role == GlobalUserRole.ADMIN
+                        or membership.role_in_course in (
+                            CourseRole.PROF, CourseRole.TUTOR)):
+                    raise _AuthError(
+                        403, "Nur Zugriff auf eigene Einreichungen.")
+            key = workspace_service.review_key(task, review_submission_id)
+        else:
+            key = workspace_key(task.course_id, task.id, user.id)
         return (agent["url"], agent.get("key") or "", key, user.id)
 
 
 async def _resolve(task_id: int, token: str,
-                   trusted_user_id: int | None = None):
+                   trusted_user_id: int | None = None,
+                   review_submission_id: int | None = None):
     """_resolve_sync im Executor (DB) mit Timeout."""
     loop = asyncio.get_running_loop()
     return await asyncio.wait_for(
         loop.run_in_executor(
-            None, _resolve_sync, task_id, token, trusted_user_id),
+            None, _resolve_sync, task_id, token, trusted_user_id,
+            review_submission_id),
         timeout=20)
 
 
@@ -596,14 +665,19 @@ async def preview_http(task_id: int, rest: str, request: Request,
     trusted_user_id: nur vom Subdomain-Middleware gesetzt (Cookie-freie
     PWA-Manifest-Fetches, s. dort).
     """
-    port, up_path = _parse_preview_path(rest, request.url.query)
+    try:
+        review_id, fwd_query = _split_review(request.url.query)
+    except _AuthError as e:
+        return _json(e.status, e.message)
+    port, up_path = _parse_preview_path(rest, fwd_query)
     if port is None:
         return _json(400, "Ungültiger Port.")
 
     try:
         ctx = await _resolve(task_id, _cookie_value(
             request.headers.get("cookie", ""), "access_token"),
-            trusted_user_id=trusted_user_id)
+            trusted_user_id=trusted_user_id,
+            review_submission_id=review_id)
     except _AuthError as e:
         return _json(e.status, e.message)
     except Exception:
@@ -684,6 +758,19 @@ async def preview_http(task_id: int, rest: str, request: Request,
         hdrs[n.decode("latin-1")] = v.decode("latin-1")
     # Preview-Subdomains zeigen Workspace-Apps (User-Content) → nie indexieren
     hdrs["x-robots-tag"] = "noindex, nofollow"
+    # Pfad-Modus: relative Location-Header des Workspace-Servers (z.B.
+    # Jupyter: 302 → /tree) würden ohne Präfix gegen die AICampus-App
+    # selbst laufen (404). Subdomain-Modus: App läuft auf / → Location
+    # bleibt. (Absolute/foreign Locations bleiben ebenfalls unverändert.)
+    if status in (301, 302, 303, 307, 308) and "location" in hdrs:
+        loc = hdrs["location"]
+        host = request.headers.get("host", "").lower().rsplit(":", 1)[0]
+        if loc.startswith("/") and not loc.startswith("//") \
+                and _parse_label_host(host) is None:
+            new = f"/preview/{task_id}/{port}{loc}"
+            if review_id is not None:
+                new += ("&" if "?" in new else "?") + f"review={review_id}"
+            hdrs["location"] = new
     decoder = _ChunkedDecoder() if is_chunked else None
 
     async def _body():
@@ -721,14 +808,20 @@ async def preview_http(task_id: int, rest: str, request: Request,
 async def preview_ws(task_id: int, rest: str, websocket: WebSocket):
     """WS-Preview: brückt Browser-Frames (uvicorn-dekodiert) auf die
     Agent-Leiste (rohe Frames nach dem 101)."""
-    port, up_path = _parse_preview_path(rest, websocket.url.query)
+    try:
+        review_id, fwd_query = _split_review(websocket.url.query)
+    except _AuthError:
+        await websocket.close(code=1008)
+        return
+    port, up_path = _parse_preview_path(rest, fwd_query)
     if port is None:
         await websocket.close(code=1008)
         return
 
     try:
         ctx = await _resolve(task_id, _cookie_value(
-            websocket.headers.get("cookie", ""), "access_token"))
+            websocket.headers.get("cookie", ""), "access_token"),
+            review_submission_id=review_id)
     except _AuthError:
         await websocket.close(code=1008)
         return
@@ -903,13 +996,18 @@ async def preview_ws(task_id: int, rest: str, websocket: WebSocket):
 async def preview_handoff(request: Request,
                           task_id: int,
                           port: int = Query(0),
-                          path: str = Query("/")):
+                          path: str = Query("/"),
+                          review: int | None = Query(None)):
     """302 zur Preview-Subdomain (nur mit PREVIEW_BASE_DOMAIN).
 
     Erstbesuch: legt über ein One-Shot-Handoff-Ticket den access_token-
     Cookie auf der Subdomain an (/__preview_auth) und zeigt dann die
     App unter `path`. Browser folgt der Kette in iframe ODER neuem Tab
     — die UI nutzt nur diese URL, das Label kennt sie nicht.
+
+    review=<submission_id>: Review-Workspace — die Subdomain selbst
+    trägt das Review-Ziel (Label …-r<id>-…), alle Requests darauf
+    routen auf die Einreichung, Auth-Check wie im Review-Workspace.
     """
     if not PREVIEW_BASE_DOMAIN:
         return _json(400, "Preview-Subdomains sind nicht konfiguriert.")
@@ -918,9 +1016,12 @@ async def preview_handoff(request: Request,
     nxt = (path or "/").strip()
     if not nxt.startswith("/") or nxt.startswith("//") or "\\" in nxt:
         return _json(400, "Ungültiger Pfad.")
+    if review is not None and review <= 0:
+        return _json(400, "Ungültige Einreichung.")
     try:
         ctx = await _resolve(task_id, _cookie_value(
-            request.headers.get("cookie", ""), "access_token"))
+            request.headers.get("cookie", ""), "access_token"),
+            review_submission_id=review)
     except _AuthError as e:
         return _json(e.status, e.message)
     except Exception:
@@ -933,7 +1034,7 @@ async def preview_handoff(request: Request,
     if not user_id:
         return _json(401, "Nicht authentifiziert.")
     ticket = _ticket_create(task_id, port, user_id, nxt)
-    label = preview_label(task_id, port, user_id)
+    label = preview_label(task_id, port, user_id, review)
     return RedirectResponse(
         url=(f"https://{label}.{PREVIEW_BASE_DOMAIN}"
              f"/__preview_auth?ticket={ticket}"),

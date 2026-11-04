@@ -130,6 +130,9 @@ def workspaces_list(payload: dict = Depends(auth.verify_token)) -> dict:
             "mem": mem.get("usage") if isinstance(mem, dict) else None,
             "disk": disk.get("usage") if isinstance(disk, dict) else None,
             "disk_quota_mb": disk.get("quota_mb") if isinstance(disk, dict) else None,
+            # Sleep-Backup: {at, size} = Volume liegt als tar.gz auf dem
+            # AICampus-Server (Volume auf dieser Engine ist gelöscht).
+            "slept": info.get("sleep"),
         })
     return {"workspaces": out}
 
@@ -207,6 +210,24 @@ def workspace_stop(key: str, payload: dict = Depends(auth.verify_token)) -> dict
     return {"ok": True, "state": "stopped"}
 
 
+@app.post("/workspaces/{key}/restore")
+@_translate
+async def workspace_restore(key: str, request: Request,
+                            payload: dict = Depends(auth.verify_token)) -> dict:
+    """Sleep-Backup (tar.gz) in das frische Volume entpacken (hostseitig).
+
+    Wird von AICampus direkt nach POST /workspaces mit fresh=true gerufen,
+    wenn auf dem Server ein Backup für diesen Key liegt. Bestehende
+    (Starter-)Dateien werden vom Backup überschrieben."""
+    _op(payload, f"ws:{key}")
+    data = await request.body()
+    if not data:
+        raise HTTPException(status_code=400, detail="Body (tar.gz) fehlt")
+    _touch(key)
+    n = docker_ops.restore_volume_tar(key, data)
+    return {"ok": True, "files": n}
+
+
 @app.post("/workspaces/{key}/start")
 @_translate
 def workspace_start(key: str, payload: dict = Depends(auth.verify_token)) -> dict:
@@ -234,10 +255,14 @@ def _reconcile(key: str) -> None:
     eine Spec hält (aus dem letzten Status-Poll), wird der Container
     dagegen abgeglichen — sonst könnte ein reiner List-Refresh (ohne
     Status) nach einer Tutor-Änderung der Zugriffs-Klassen noch das alte
-    ro-Mount-Layout anzeigen."""
+    ro-Mount-Layout anzeigen.
+
+    NUR bei bereits laufendem Container: ensure_container würde einen
+    gestoppten (oder fehlenden) Container sonst on-demand (re-)starten
+    und den manuellen Stopp aufheben."""
     info = REGISTRY.get(key)
     sp = info.get("spec") if info else None
-    if sp:
+    if sp and docker_ops.container_state(key) == "running":
         docker_ops.ensure_container(key, sp)
 
 

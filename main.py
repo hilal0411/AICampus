@@ -14,6 +14,7 @@ from typing import Any, Optional, Sequence
 import logging
 import os
 import re
+import threading
 from pathlib import Path
 from urllib.parse import quote
 
@@ -72,7 +73,7 @@ from services.mc_service import (
 from services import image_spec_service
 from services import upload_service
 from services import trash_service
-from services.workspace_service import workspace_service
+from services.workspace_service import workspace_service, prune_backup_loop
 from services.slides_service import (
     ASPECT_LABELS,
     ASPECT_RATIOS,
@@ -81,7 +82,7 @@ from services.slides_service import (
     slide_count,
 )
 
-from api import admin, analytics as analytics_api, auth, forum, importer, image_specs, media as media_api, materials as materials_api, mcp_context, mcp_oauth, mcp_server as mcp_server_api, mcp_tokens, notifications as notifications_api, push as push_api, references, script as script_api, script_questions, slides as slides_api, student, tutor, user_settings, course_members, versions as versions_api
+from api import admin, agent_api, analytics as analytics_api, auth, forum, importer, image_specs, media as media_api, materials as materials_api, mcp_context, mcp_oauth, mcp_server as mcp_server_api, mcp_tokens, notifications as notifications_api, push as push_api, references, review_workspace, script as script_api, script_questions, slides as slides_api, student, tutor, user_settings, course_members, versions as versions_api
 
 
 def _calculate_percentile(my_score: float, other_scores: list[float]) -> int:
@@ -129,6 +130,8 @@ async def lifespan(app: FastAPI):
         migrate_forum_channels()
         import_service.mark_interrupted_on_startup()  # aktive Import-Jobs → 'interrupted'
         analytics.prune_old()  # Page-View-Bereinigung (No-Op, solange RETENTION_DAYS=None)
+        # Sleep-Backup-Retention (30 Tage nach letzter Aktivität)
+        threading.Thread(target=prune_backup_loop, daemon=True).start()
 
         # Admin-User anlegen, wenn DB leer
         with Session(engine) as session:
@@ -406,6 +409,7 @@ app.add_middleware(preview_proxy.PreviewSubdomainMiddleware)
 
 # API-Routes
 app.include_router(auth.router)
+app.include_router(agent_api.router)  # /api/agent/… (Agent-Callbacks, HMAC)
 app.include_router(user_settings.router)
 app.include_router(admin.router)
 app.include_router(analytics_api.router)
@@ -413,6 +417,7 @@ app.include_router(image_specs.router)
 app.include_router(tutor.router)
 app.include_router(course_members.router)
 app.include_router(student.router)
+app.include_router(review_workspace.router)  # /api/review/… (Review-Workspace)
 app.include_router(media_api.router)
 app.include_router(materials_api.router)
 app.include_router(references.router)
@@ -501,6 +506,12 @@ for _r in _mcp_auth_routes:
 async def http_exception_handler(request: Request, exc: HTTPException):
     """401 → Redirect zur Login-Seite statt JSON-Fehler."""
     if exc.status_code == 401:
+        # Machine-to-Machine (Agent-Callback mit X-Agent-Token): JSON-Fehler,
+        # kein Login-Redirect (der Agent hat kein Browser-Konto).
+        if "X-Agent-Token" in request.headers:
+            from fastapi.responses import JSONResponse
+            return JSONResponse(status_code=exc.status_code,
+                                content={"detail": exc.detail})
         # Ziel-URL merken, damit es nach dem Login zurückgeht
         # (Login/Signup selbst und API-Calls ausgenommen).
         next_url = ""

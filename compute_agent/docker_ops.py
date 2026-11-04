@@ -12,12 +12,14 @@ Alle Funktionen sind synchron; FastAPI führt sie im Threadpool aus
 
 import base64
 import hashlib
+import io
 import json
 import os
 import re
 import shlex
 import shutil
 import subprocess
+import tarfile
 import tempfile
 import threading
 import time
@@ -753,6 +755,12 @@ def remove_workspace(key: str) -> None:
     _PORT_CONFIRMED.pop(key, None)  # frischer Container = frische Bestätigung
 
 
+def remove_volume_only(key: str) -> None:
+    """Nur das /workspace-Volume entfernen (Sleep-Backup liegt auf dem
+    Server; Engine-Disk wird frei). Container/Netz sind dann schon weg."""
+    _docker("volume", "rm", volume_name(key), check=False)
+
+
 def stop_container_only(key: str) -> None:
     """Nur Container entfernen (Idle-Kill des Reapers), Volume bleibt."""
     if container_state(key) is not None:
@@ -1424,6 +1432,64 @@ def snapshot(key: str, cap: int | None = None,
             f"(z. B. Datasets, Logs, alte Checkpoints) aus dem "
             f"Workspace löschen und erneut einreichen", 413)
     return out_b
+
+
+def volume_backup_tar(key: str, cap: int) -> bytes | None:
+    """tar.gz des /workspace-Volumes, HOSTSEITIG (Sleep-Backup).
+
+    Funktioniert auch bei gestopptem Container (Volume-Mountpoint).
+    Enthält exakt das Named-Volume — 🔒-ro-Mounts sind physikalisch
+    nicht darin (keine Doppel-Sicherung der Task-Datasets).
+
+    None = Volume nicht hostseitig erreichbar (Feature in dieser
+    Deployment nicht verfügbar) oder nach dem Tarren über `cap`
+    (Volume bleibt dann auf der Engine, s. backup.maybe_sleep_backup).
+    """
+    mp = _volume_mountpoint(key)
+    if not mp or not os.path.isdir(mp):
+        return None
+    buf = io.BytesIO()
+    try:
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            for root, dirs, files in os.walk(mp):
+                for name in sorted(files):
+                    p = os.path.join(root, name)
+                    rel = os.path.relpath(p, mp).replace(os.sep, "/")
+                    try:
+                        tar.add(p, arcname=rel, recursive=False)
+                    except OSError:
+                        continue  # Datei im selben Moment weg → überspringen
+    except Exception:
+        return None
+    if len(buf.getvalue()) > cap:
+        return None
+    return buf.getvalue()
+
+
+def restore_volume_tar(key: str, data: bytes) -> int:
+    """Sleep-Backup (tar.gz) in das /workspace-Volume entpacken (hostseitig).
+
+    Liefert die Anzahl der wiederhergestellten Dateien. Bestehende
+    Dateien (Starter-Dateien im frischen Volume) werden vom Backup
+    überschrieben — der Student-Stand gewinnt. Pfad-Escape und
+    Device-Files werden abgelehnt; Symlinks sind erlaubt (venvs o.ä.).
+    """
+    mp = _volume_mountpoint(key)
+    if not mp or not os.path.isdir(mp):
+        raise DockerError(
+            "Volume nicht hostseitig erreichbar — Restore nicht möglich", 500)
+    n_files = 0
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+        members = tar.getmembers()
+        for member in members:
+            name = member.name.replace("\\", "/")
+            if name.startswith("/") or ".." in name.split("/"):
+                raise DockerError(f"Ungültiger Backup-Eintrag: {member.name}", 500)
+            if member.isdev():
+                raise DockerError(f"Device-Files nicht erlaubt: {member.name}", 500)
+            n_files += 1 if member.isfile() else 0
+        tar.extractall(mp)
+    return n_files
 
 
 def _volume_mountpoint(key: str) -> str | None:

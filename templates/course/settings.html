@@ -481,7 +481,10 @@
     function sessionUsageHtml(s) {
       const parts = [];
       if (s.active && s.mem != null) { parts.push('RAM ' + fmtBytes(s.mem)); }
-      if (s.disk != null) {
+      if (s.backed_up) {
+        // Volume liegt als tar.gz auf dem Server (Sleep-Backup)
+        parts.push('💾 Backup auf Server');
+      } else if (s.disk != null) {
         const q = s.disk_quota_mb ? ' / ' + fmtBytes(s.disk_quota_mb * 1024 * 1024) : '';
         parts.push('Disk ' + fmtBytes(s.disk) + q);
       }

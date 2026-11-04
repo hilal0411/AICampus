@@ -1,5 +1,8 @@
 """
-Reaper: Container nach Idle-Timeout entfernen (Volume bleibt erhalten).
+Reaper: Container nach Idle-Timeout entfernen. Mit Sleep-Backup
+(AICAMPUS_URL gesetzt) wandert das Volume als tar.gz auf den
+AICampus-Server und wird danach gelöscht (s. backup.py); ohne bleibt
+es erhalten (altes Verhalten).
 
 Registry (in-memory): key → {spec, last_activity}. Bei Agent-Neustart wird
 die Registry aus den Docker-Labels rekonstruiert (Spec kommt per
@@ -10,7 +13,7 @@ Run-Job sind immun (kein Kill mitten im Training).
 import threading
 import time
 
-from . import config, docker_ops, runs
+from . import backup, config, docker_ops, runs
 
 
 class WorkspaceRegistry:
@@ -78,6 +81,16 @@ class WorkspaceRegistry:
             if key in self._items:
                 self._items[key]["mem"] = mem
 
+    def set_sleep(self, key: str, sleep: dict | None) -> None:
+        """Sleep-Backup-Zustand: {at, size} (None = entfernen).
+
+        Setzt backup.maybe_sleep_backup nach erfolgreichem Upload —
+        das Volume ist dann weg, der Arbeitsstand liegt auf dem
+        AICampus-Server (UI: „Backup auf Server“)."""
+        with self._lock:
+            if key in self._items:
+                self._items[key]["sleep"] = sleep
+
     def rebuild_from_docker(self) -> int:
         """Nach Neustart: bekannte Container mit Grace-Periode auffüllen."""
         n = 0
@@ -116,11 +129,14 @@ def _sweep() -> None:
             continue
         if now - info["last_activity"] <= config.IDLE_TIMEOUT:
             continue
-        try:
-            docker_ops.stop_container_only(key)
-            REGISTRY.touch(key)  # Container weg → kein erneuter Kill nötig
-        except Exception:
-            pass
+        if docker_ops.container_state(key) is not None:
+            try:
+                docker_ops.stop_container_only(key)
+            except Exception:
+                continue  # Retry im nächsten Sweep
+        if not backup.maybe_sleep_backup(key):
+            continue  # Upload fehlgeschlagen → Volume bleibt, Retry (Backoff)
+        REGISTRY.touch(key)  # Container weg + Volume weg (bzw. Feature aus) → erledigt
 
 
 def _check_disk_quota(key: str, info: dict) -> None:

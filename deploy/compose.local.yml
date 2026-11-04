@@ -64,6 +64,10 @@ services:
       GPU_MAX_JOBS: "8"
       IDLE_TIMEOUT: "1200"
       # AGENT_INIT_TIMEOUT: "1800"   # init.sh-Build-Timeout (30 min Default)
+      # Sleep-Backup: beim Idle-Kill wandert das Volume hierher und wird
+      # von der Engine gelöscht (Arbeitsstand bleibt auf dem Server,
+      # Restore bei Rückkehr). Compose-Netz-Name der AICampus-App.
+      AICAMPUS_URL: http://aicampus:8000
     volumes:
       # Der Agent verwaltet den Docker-Daemon des HOSTS (Workspace-Container,
       # Images, Volumes leben dort — auch für GPU-Passthrough nötig)

@@ -1,0 +1,201 @@
+{#-
+  Workspace-Mini-IDE (geteilt zwischen Lösungsseite + Review-Workspace).
+  Parameter (alle optional, Defaults = Student-Lösungsseite, unverändert):
+    ws_title          Heading (Default: "Deine Lösung", "" = aus)
+    ws_api            API-Base (Default: /api/student/tasks/<id>/workspace)
+    ws_show_timer     solve-timer zeigen (Default: true)
+    ws_reset_label    Reset-Button-Label (Default: "↺ Zurücksetzen")
+    ws_reset_title    Reset-Button-Title
+    ws_reset_confirm  Confirm-Text (JS) — s. workspace_ide_scripts.html
+    ws_show_grading   LLM-Grading-Progress (Default: true)
+    ws_show_submit    Abgabe-Leiste (Submit/Downloads) (Default: true)
+    ws_show_taskdesc  Aufgabenstellung-Sidebar (Default: true)
+    ws_inst           Instanz-Id für mehrere IDEs pro Seite: alle
+                      Element-IDs bekommen den Suffix "-<ws_inst>"
+                      (Default: leer = unveränderte IDs). ws-split-handle
+                      und ws-fullscreen-btn bleiben ohne Suffix —
+                      workspace.js findet sie per Wrapper-Scope.
+    ws_auto_start     Status-Poll sichert den Container idempotent zu
+                      (Default: true). false = Cold-Instanz: der
+                      Container entsteht erst per ▶ Starten.
+-#}
+{%- set sfx = ("-" ~ ws_inst) if (ws_inst is defined and ws_inst) else "" %}
+        <!-- ─── WORKSPACE-AUFGABE (Mini-IDE) ────────────────────── -->
+        <div class="card">
+          {# ws_title = "" → kein Heading (eingebettete Instanzen: der
+             Kontext steht schon in der Box darüber) #}
+          {% set wsTitle = ws_title | default("Deine Lösung") %}
+          {% if wsTitle %}
+          <h2 class="font-semibold text-gray-800 mb-3 flex items-baseline gap-2">
+            {{ wsTitle }}
+            {% if ws_show_timer | default(true) %}
+            <span id="solve-timer{{ sfx }}" class="text-sm font-mono text-blue-600 ml-auto tabular-nums">00:00</span>
+            {% endif %}
+          </h2>
+          {% endif %}
+
+          <!-- Container-Status + RAM/Disk-Nutzung + Start/Stop-Toggle +
+               Zurücksetzen (eine dezente graue Reihe) -->
+          <div class="mb-3 flex items-center gap-x-3 gap-y-1.5 flex-wrap rounded-lg bg-gray-100 border border-gray-200 px-3 py-1.5">
+            <span id="ws-status-dot{{ sfx }}" class="h-2.5 w-2.5 shrink-0 rounded-full bg-blue-400 animate-pulse"></span>
+            <span id="ws-banner{{ sfx }}" class="min-w-0 text-sm text-gray-700"><span class="animate-spin inline-block">⏳</span> Arbeitsumgebung wird vorbereitet …</span>
+            <span id="ws-usage{{ sfx }}" class="shrink-0 text-xs text-gray-500 tabular-nums"></span>
+            <div class="ml-auto flex items-center gap-1.5">
+              <button id="ws-toggle-btn{{ sfx }}" type="button"
+                      class="inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-lg border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 transition"
+                      title="Container starten">
+                <span id="ws-toggle-icon{{ sfx }}" class="inline-flex items-center"><svg viewBox="0 0 24 24" class="h-3.5 w-3.5" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg></span>
+                <span id="ws-toggle-label{{ sfx }}">Starten</span>
+              </button>
+              <button id="ws-reset-btn{{ sfx }}" type="button"
+                      class="text-xs px-2.5 py-1 rounded-lg border border-amber-300 text-amber-700 hover:bg-amber-50 transition"
+                      title="{{ ws_reset_title | default('Alle Dateien zurücksetzen auf die Vorlage (deine Änderungen gehen verloren!)') }}">
+                {{ ws_reset_label | default('↺ Zurücksetzen') }}
+              </button>
+            </div>
+          </div>
+
+          <!-- ─── Datei-Tree + Editor (gemeinsamer, nahtloser Container) ──
+               Die Toolbar ist Geschwister des Tree-Elements — workspace.js
+               räumt treeEl.innerHTML bei jedem Render auf. -->
+          <div class="ws-tree-editor-wrap flex flex-col sm:flex-row h-[540px] sm:h-[480px] border border-gray-200 rounded-lg overflow-hidden bg-white">
+            <div class="flex flex-col h-[220px] sm:h-auto sm:w-52 shrink-0 border-b sm:border-b-0 sm:border-r border-gray-200 bg-gray-50">
+              <div class="flex items-center gap-1 p-1.5 border-b border-gray-200 bg-gray-100">
+                <button type="button" id="ws-tree-refresh-btn{{ sfx }}" title="Aktualisieren" class="ws-tree-btn">⟳</button>
+                <button type="button" id="ws-new-file-btn{{ sfx }}" title="Neue Datei in der Wurzel anlegen" class="ws-tree-btn">＋ 📄</button>
+                <button type="button" id="ws-new-folder-btn{{ sfx }}" title="Neuen Ordner in der Wurzel anlegen" class="ws-tree-btn">＋ 📁</button>
+                <button type="button" id="ws-upload-btn{{ sfx }}" title="Dateien oder Ordner hochladen (mehrere möglich) — alternativ per Drag & Drop auf einen Ordner" class="ws-tree-btn">📤 ▾</button>
+                <span id="ws-save-state{{ sfx }}" class="ml-auto text-[10px] text-gray-400 truncate"></span>
+                <button type="button" id="ws-fullscreen-btn" title="Vollbild" class="ws-tree-btn">⛶</button>
+              </div>
+              <!-- p-1 bleibt: das 8-px-Padding-Strippen am Anschlag macht
+                   der Snap unsichtbar (wsTaskDescApply blendet den Baum
+                   bei < 10 px Restplatz aus; die Sektionen stapeln dann
+                   direkt an der Toolbar, die freie Fläche liegt unten). -->
+              <div id="ws-filetree{{ sfx }}" class="flex-1 min-h-0 overflow-y-auto p-1 text-sm">
+                <div class="text-gray-400 text-xs p-1">Dateien werden geladen …</div>
+              </div>
+              <!-- ─── Terminals (PTY im Container) ──────────────────── -->
+              <div id="ws-terminals-sec{{ sfx }}" class="hidden border-t border-gray-200">
+                <div class="flex items-center gap-1 h-7 px-1.5 bg-gray-100 border-b border-gray-200 select-none cursor-pointer touch-none"
+                     title="Klick: ein-/ausklappen · Ziehen: Höhe der Aufgabenstellung verstellen">
+                  <button type="button" id="ws-terminals-toggle{{ sfx }}" title="Liste einklappen" class="p-0 shrink-0 text-gray-400 hover:text-gray-600">
+                    <svg class="ws-sec-chevron h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                  </button>
+                  <span class="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Terminals</span>
+                  <button type="button" id="ws-new-terminal-btn{{ sfx }}" title="Neues Terminal öffnen" class="ws-tree-btn ml-auto">＋</button>
+                </div>
+                <div id="ws-terminals-list{{ sfx }}" class="p-1 text-xs overflow-y-auto max-h-24"></div>
+              </div>
+              <!-- ─── Ports (Preview der Webservices) ───────────────── -->
+              <div id="ws-ports-sec{{ sfx }}" class="hidden border-t border-gray-200">
+                <div class="flex items-center gap-1 h-7 px-1.5 bg-gray-100 border-b border-gray-200 select-none cursor-pointer touch-none"
+                     title="Klick: ein-/ausklappen · Ziehen: Höhe der Aufgabenstellung verstellen">
+                  <button type="button" id="ws-ports-toggle{{ sfx }}" title="Liste einklappen" class="p-0 shrink-0 text-gray-400 hover:text-gray-600">
+                    <svg class="ws-sec-chevron h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                  </button>
+                  <span class="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Ports</span>
+                </div>
+                <div id="ws-ports-list{{ sfx }}" class="p-1 text-xs overflow-y-auto max-h-24"></div>
+              </div>
+              {%- if ws_show_taskdesc | default(true) %}
+              <!-- ─── Aufgabenstellung (kompakte Zweitansicht der Task-Description) ──
+                   Immer sichtbar (unabhängig vom Container); by default
+                   einklappen — Markdown wird lazy beim ersten Aufklappen
+                   gerendert (wsTaskDescEnsure). -->
+              <div id="ws-taskdesc-sec{{ sfx }}" class="border-t border-gray-200">
+                <div id="ws-taskdesc-bar{{ sfx }}" class="flex items-center gap-1 h-7 px-1.5 bg-gray-100 border-b border-gray-200 select-none cursor-pointer touch-none"
+                     title="Klick: ein-/ausklappen · Ziehen: Höhe der Aufgabenstellung verstellen">
+                  <button type="button" id="ws-taskdesc-toggle{{ sfx }}" title="Liste einklappen" class="p-0 shrink-0 text-gray-400 hover:text-gray-600">
+                    <svg class="ws-sec-chevron h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>
+                  </button>
+                  <span class="text-[10px] font-semibold text-gray-500 uppercase tracking-wide">Aufgabenstellung</span>
+                </div>
+                <div id="ws-taskdesc-list{{ sfx }}" class="hidden p-1 px-2 text-xs overflow-y-auto max-h-56"></div>
+              </div>
+              {%- endif %}
+            </div>
+
+            <!-- Ziehbarer Trenner (Tree ↔ Editor; Doppelklick = Standardgröße) -->
+            <div id="ws-split-handle" class="ws-split-handle"
+                 role="separator"
+                 title="Ziehen: Baum/Editor vergrößern · Doppelklick: Standardgröße"></div>
+
+            <!-- Editor-Spalte (nahtlos — Name/Zugriffs-Klasse stehen im Dateibaum,
+                 Speichern läuft automatisch, Löschen über Kontextmenü);
+                 Medien-Ansicht (Bilder/PDF/…) belegt denselben Bereich -->
+            <!-- min-w-0 WICHTIG: sonst wächst die Spalte nicht unter die
+                 Canvas-Breite des Terminals (min-width:auto) und verdrängt
+                 die Tree-Spalte / der Zeilenumbruch rückt aus. -->
+            <div class="flex-1 min-h-0 min-w-0">
+              <div id="ws-editor-wrap{{ sfx }}" class="ws-editor w-full h-full min-h-0">
+                <textarea id="ws-editor{{ sfx }}" class="w-full h-full font-mono text-sm"
+                          spellcheck="false"></textarea>
+                <div id="ws-media-view{{ sfx }}" class="hidden h-full"></div>
+              </div>
+              <!-- Terminal-View (belegt die Editor-Fläche; View-Schalter
+                   per wsSetView, Sessions in #ws-terminals-sec) -->
+              <div id="ws-terminal-view{{ sfx }}" class="hidden w-full h-full min-h-0">
+                <div id="ws-term-host{{ sfx }}" class="w-full h-full bg-[#0a0a0a] p-1.5 pr-0 overflow-hidden"></div>
+              </div>
+              <!-- Preview-View (iframe auf den Preview-Proxy; View-Schalter
+                   per wsSetView, Ports in #ws-ports-sec) -->
+              <div id="ws-preview-view{{ sfx }}" class="hidden w-full h-full min-h-0">
+                <div class="flex flex-col h-full">
+                  <div class="flex items-center gap-1.5 px-2 py-1 border-b border-gray-200 bg-gray-50 text-xs text-gray-600 shrink-0">
+                    <span id="ws-preview-label{{ sfx }}" class="font-semibold shrink-0"></span>
+                    <input id="ws-preview-url{{ sfx }}" type="text" spellcheck="false"
+                           autocomplete="off" placeholder="/"
+                           title="Pfad eingeben (z. B. /docs) + Enter = losfahren"
+                           class="flex-1 min-w-0 font-mono bg-transparent rounded px-1 text-gray-600 focus:outline-none focus:ring-1 focus:ring-indigo-400">
+                    <button type="button" id="ws-preview-reload-btn{{ sfx }}" title="Neu laden" class="ws-tree-btn">⟳</button>
+                    <a id="ws-preview-open-btn{{ sfx }}" target="_blank" rel="noopener" title="In neuem Tab öffnen" class="ws-tree-btn">↗</a>
+                  </div>
+                  <iframe id="ws-preview-frame{{ sfx }}" class="flex-1 w-full border-0 bg-white"
+                          title="Workspace-Preview" src="about:blank"></iframe>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {%- if ws_show_grading | default(true) %}
+          <!-- ─── Grading Progress (ID-Vereinbarung mit Base) ──── -->
+          <div id="grading-progress{{ sfx }}" class="hidden mt-3">
+            <div class="flex items-center gap-2 text-sm text-green-700">
+              <span class="animate-spin">⏳</span>
+              <span>LLM korrigiert deine Loesung...</span>
+              <span id="grading-timer{{ sfx }}" class="font-mono">0s</span>
+            </div>
+            <div class="mt-2 w-full bg-green-200 rounded-full h-2">
+              <div id="grading-progress-bar{{ sfx }}" class="bg-green-600 h-2 rounded-full transition-all" style="width: 10%"></div>
+            </div>
+            <p class="mt-1.5 text-xs text-amber-600">⚠️ Warnung: LLMs können Fehler machen – wende dich bei Fragen an deinen Tutor.</p>
+          </div>
+          {%- endif %}
+
+          {%- if ws_show_submit | default(true) %}
+          <!-- ─── Abgabe-Leiste ──────────────────────────────── -->
+          <div class="flex gap-3 mt-4 items-center">
+            <button id="submit-btn{{ sfx }}"
+                    class="bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition flex items-center gap-2">
+              <span>📤</span> Lösung einreichen
+              <span class="htmx-indicator text-sm">⏳</span>
+            </button>
+            <a href="/api/student/tasks/{{ task.id }}/package"
+               class="text-blue-700 hover:text-blue-900 border border-blue-300 hover:border-blue-500 px-3 py-2 rounded-lg transition text-sm"
+               title="Aufgaben-Vorlage inkl. Laufumgebung als docker-Paket (ohne Musterlösung/private Tests) — lokal auf dem eigenen Rechner ausführbar">
+              ⬇️ Aufgaben-Vorlage
+            </a>
+            <a href="/api/student/tasks/{{ task.id }}/workspace/package"
+               class="text-blue-700 hover:text-blue-900 border border-blue-300 hover:border-blue-500 px-3 py-2 rounded-lg transition text-sm"
+               title="Deine aktuelle Lösung (eigene + generierte Dateien) inkl. Laufumgebung als docker-Paket — lokal auf dem eigenen Rechner ausführbar">
+              ⬇️ Meine Lösung
+            </a>
+          </div>
+          {%- endif %}
+          {#- Multi-Instance: instanzspezifische Aufgabenstellung-Rohdaten
+              (ohne Suffix liefert die hostende Seite das Template) -#}
+          {%- if sfx %}
+          <template id="task-description-raw{{ sfx }}">{{ (task.description or '') | tojson }}</template>
+          {%- endif %}
+        </div>

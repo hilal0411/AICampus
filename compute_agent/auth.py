@@ -74,6 +74,28 @@ def verify_token_raw(token: str | None) -> dict:
     return payload
 
 
+def verify_token_with_key(token: str | None, key: str) -> dict | None:
+    """Token gegen ein EXPLIZITES Key verifizieren (Signatur + Expiry).
+
+    Für die AICampus-Seite: Dort kommt der Agent-Callback mit dem Key der
+    jeweiligen Engine — da die Engine nicht bekannt ist, wird jeder
+    registrierte Engine-Key einmal versucht. None = ungültig/abgelaufen.
+    """
+    if not token or not key or token.count(".") != 1:
+        return None
+    raw, sig = token.split(".")
+    try:
+        expected = hmac.new(key.encode(), raw.encode(), hashlib.sha256).digest()
+        if not hmac.compare_digest(_b64d(sig), expected):
+            return None
+        payload = json.loads(_b64d(raw))
+    except Exception:
+        return None
+    if time.time() > float(payload.get("exp", 0)):
+        return None
+    return payload
+
+
 def verify_token(request: Request,
                  token: str | None = Header(default=None, alias="X-Agent-Token")):
     """FastAPI-Dependency: liefert das verifizierte Payload-Dict."""

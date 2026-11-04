@@ -51,10 +51,21 @@ services:
       GPU_MAX_JOBS: "8"
       IDLE_TIMEOUT: "1200"
       # AGENT_INIT_TIMEOUT: "1800"   # init.sh-Build-Timeout (30 min Default)
+      # Sleep-Backup (optional): beim Idle-Kill wandert das Volume als
+      # tar.gz hierher und wird von dieser Engine gelöscht (Arbeitsstand
+      # bleibt auf dem Server, Restore bei Rückkehr). Z. B.
+      # AICAMPUS_URL: http://<aicampus-server>:8000. Leer = inaktiv
+      # (Volume bleibt auf der Engine, altes Verhalten).
+      AICAMPUS_URL: ${AICAMPUS_URL:-}
     volumes:
       # Der Agent verwaltet den Docker-Daemon des HOSTS (Workspace-Container,
       # Images, Volumes leben dort — auch für GPU-Passthrough nötig)
       - /var/run/docker.sock:/var/run/docker.sock
+      # Volumes des Host-Daemons hostseitig (rw) — für die Disk-Quota-
+      # Messung/Aufräum-Function und Sleep-Backups (hostseitiges Tar des
+      # Volumes beim Idle-Kill). Bei anderem Docker-Data-Root automatisch
+      # inaktiv (Fallback: Messung via docker exec).
+      - /var/lib/docker/volumes:/var/lib/docker/volumes
       # Bind-Mount statt Named Volume: Der Agent übergibt Asset-Pfade an
       # den Docker-Daemon, der sie als HOST-Pfad auflöst. Ein Named Volume
       # wäre dem Daemon nicht als Pfad zugänglich → leere Asset-Mounts.

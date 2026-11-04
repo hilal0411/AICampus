@@ -37,6 +37,16 @@ WORKSPACE_DIR.mkdir(parents=True, exist_ok=True)
 SUBMISSION_DIR = BASE_DIR / "data" / "submissions"
 SUBMISSION_DIR.mkdir(parents=True, exist_ok=True)
 
+# Sleep-Backups: Workspace-Volumes, die beim Idle-Kill von der Compute-Engine
+# auf den Server gewandert sind (data/workspace_backups/ws-{c}-{t}-{s}.tar.gz
+# + .json-Meta). Beim nächsten Workspace-Start werden sie in das frische
+# Volume zurückgespielt (s. services/workspace_service.ensure_workspace).
+WORKSPACE_BACKUP_DIR = BASE_DIR / "data" / "workspace_backups"
+WORKSPACE_BACKUP_DIR.mkdir(parents=True, exist_ok=True)
+# Retention: Backup wird X Tage nach letzter Aktivität gelöscht.
+WORKSPACE_BACKUP_RETENTION_DAYS = int(
+    os.getenv("WORKSPACE_BACKUP_RETENTION_DAYS", "30"))
+
 # Upload-Aufgaben: Template- + Musterlösungs-Dateien (Datei wie hochgeladen,
 # Name aus Task-Feldern) unter data/upload_tasks/{task_id}/<name>
 UPLOAD_TASK_DIR = BASE_DIR / "data" / "upload_tasks"
