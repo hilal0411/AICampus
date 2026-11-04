@@ -22,6 +22,7 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import update
 from sqlmodel import Field, Session, SQLModel, func, select
 
+from api.forum import advance_channel_read_state, latest_message_id
 from database.base import get_session
 from database.models import Notification, User
 from services import notifications
@@ -121,13 +122,32 @@ async def mark_all_notifications_read(
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """Alle ungelesenen Benachrichtigungen des Users als gelesen markieren."""
+    """Alle ungelesenen Benachrichtigungen des Users als gelesen markieren.
+
+    Nebenwirkung (Forum): forum_message-Benachrichtigungen eines Kanals
+    markieren den Kanal bis zur letzten Nachricht als gelesen — die roten
+    Punkte an Forum-Tab und Kanälen verschwinden mit der Glocke.
+    """
+    forum_channels = {
+        (n.course_id, n.channel_id)
+        for n in session.exec(
+            select(Notification.course_id, Notification.channel_id)
+            .where(Notification.user_id == user.id)
+            .where(Notification.type == "forum_message")
+            .where(Notification.read_at.is_(None))
+            .where(Notification.channel_id.is_not(None))
+        ).all()
+    }
     result = session.exec(
         update(Notification)
         .where(Notification.user_id == user.id)
         .where(Notification.read_at.is_(None))
         .values(read_at=datetime.now())
     )
+    for course_id, channel_id in forum_channels:
+        advance_channel_read_state(
+            session, user.id, channel_id, latest_message_id(session, course_id, channel_id)
+        )
     session.commit()
     if result.rowcount:  # andere offene Tabs sofort updaten (statt Poll abzuwarten)
         notifications.notify_read(user.id)  # type: ignore[arg-type]

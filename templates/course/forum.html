@@ -467,19 +467,76 @@
   // der Poll → identisches Verhalten inkl. Gelesen-Markierung). Der
   // 4-s-Poll bleibt als Fallback, falls der Stream mal tot ist.
   // (Eigene, zusätzliche Verbindung — die Glocke hat ihre eigene.)
-  if (activeChannelId != null) {
-    try {
-      const forumEs = new EventSource('/api/notifications/stream');
-      forumEs.onmessage = (e) => {
-        try {
-          const data = JSON.parse(e.data);
-          if (data.event === 'forum_message' && data.course_id === courseId && data.channel_id === activeChannelId) {
-            pollForum();
-          }
-        } catch { /* fremdes/ungültiges Event ignorieren */ }
-      };
-    } catch { /* EventSource unsupported → reines Polling */ }
+  // Zusätzlich: „read“-Events (z. B. „Alle als gelesen markieren“ in
+  // der Glocke, auch aus anderem Tab) → Kanal-Badges + Forum-Tab-Badge
+  // serverseitig neu laden.
+  // Sidebar-Badge eines Kanals auf Server-Stand setzen (0 → entfernen).
+  function setChannelBadge(channelId, count) {
+    const row = document.querySelector(`.forum-channel[data-channel-id="${channelId}"]`);
+    if (!row) return;
+    let badge = row.querySelector('.channel-unread');
+    if (!count) {
+      if (badge) badge.remove();
+      if (!row.classList.contains('bg-blue-50')) row.classList.remove('font-semibold', 'text-gray-900');
+      return;
+    }
+    if (!badge) {
+      const a = row.querySelector('a');
+      const span = document.createElement('span');
+      span.className = `channel-unread inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full ${row.dataset.muted === '1' ? 'bg-gray-400' : 'bg-red-500'} text-white text-[10px] font-bold leading-none shrink-0`;
+      const anchor = a.querySelector('span.shrink-0');
+      a.insertBefore(span, anchor || null);
+      badge = span;
+    }
+    badge.textContent = count > 99 ? '99+' : String(count);
+    if (!row.classList.contains('bg-blue-50')) row.classList.add('font-semibold', 'text-gray-900');
   }
+
+  // Forum-Tab-Badge = Summe der Ungelesen über alle nicht-gemuteten Kanäle
+  // (gleiche Rechnung wie serverseitig in _course_tab_context).
+  function setForumTabBadge(total) {
+    const link = document.querySelector('#course-tab-bar a[href$="/forum"]');
+    if (!link) return;
+    let badge = link.querySelector('.tab-badge');
+    if (!total) {
+      if (badge) badge.remove();
+      return;
+    }
+    if (!badge) {
+      badge = document.createElement('span');
+      badge.className = 'tab-badge ml-1.5 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold leading-none align-middle';
+      link.appendChild(badge);
+    }
+    badge.dataset.count = String(total);
+    badge.textContent = total > 99 ? '99+' : String(total);
+  }
+
+  async function refreshForumBadges() {
+    try {
+      const res = await fetch(`${forumBase}/channels`, { credentials: 'same-origin' });
+      if (!res.ok) return;
+      let total = 0;
+      for (const ch of await res.json()) {
+        setChannelBadge(ch.id, ch.unread_count);
+        if (ch.unread_count && !ch.muted) total += ch.unread_count;
+      }
+      setForumTabBadge(total);
+    } catch { /* kein Netz — nächste Gelegenheit */ }
+  }
+
+  try {
+    const forumEs = new EventSource('/api/notifications/stream');
+    forumEs.onmessage = (e) => {
+      try {
+        const data = JSON.parse(e.data);
+        if (data.event === 'forum_message' && data.course_id === courseId && data.channel_id === activeChannelId) {
+          pollForum();
+        } else if (data.event === 'read') {
+          refreshForumBadges();
+        }
+      } catch { /* fremdes/ungültiges Event ignorieren */ }
+    };
+  } catch { /* EventSource unsupported → reines Polling */ }
 
   // ─── Kanäle: anlegen / umbenennen / löschen ──────────────────
   const channelForm = document.getElementById('channel-form');

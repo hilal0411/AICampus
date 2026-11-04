@@ -513,33 +513,49 @@ async def mark_forum_channel_read(
 
     target = up_to_id
     if target is None:
-        target = session.exec(
-            select(func.max(ForumMessage.id))  # type: ignore[call-overload]
-            .where(ForumMessage.course_id == course_id)
-            .where(ForumMessage.channel_id == ch.id)
-        ).one()
-        target = target or 0
+        target = latest_message_id(session, course_id, ch.id)
 
     if target > 0:
-        rs = session.exec(
-            select(ForumChannelReadState)
-            .where(ForumChannelReadState.user_id == viewer.id)
-            .where(ForumChannelReadState.channel_id == ch.id)
-        ).first()
-        if rs is None:
-            session.add(
-                ForumChannelReadState(
-                    user_id=viewer.id,  # type: ignore[arg-type]
-                    channel_id=ch.id,  # type: ignore[arg-type]
-                    last_read_message_id=target,
-                )
-            )
-        elif rs.last_read_message_id < target:
-            rs.last_read_message_id = target
-            session.add(rs)
+        advance_channel_read_state(session, viewer.id, ch.id, target)
         session.commit()
 
     return {"ok": True}
+
+
+def latest_message_id(session: Session, course_id: int, channel_id: int) -> int:
+    """ID der letzten Nachricht im Kanal (0, wenn keine)."""
+    last = session.exec(
+        select(func.max(ForumMessage.id))  # type: ignore[call-overload]
+        .where(ForumMessage.course_id == course_id)
+        .where(ForumMessage.channel_id == channel_id)
+    ).one()
+    return last or 0
+
+
+def advance_channel_read_state(session: Session, user_id: int, channel_id: int, target: int) -> None:
+    """Gelesen-Stand eines Kanals vorrücken (nie zurück) bis ``target``.
+
+    Der Commit bleibt beim Aufrufer. Wird vom Read-Endpoint und von der
+    Glocke (Read-All markiert betroffene Kanäle mit als gelesen) genutzt.
+    """
+    if target <= 0:
+        return
+    rs = session.exec(
+        select(ForumChannelReadState)
+        .where(ForumChannelReadState.user_id == user_id)
+        .where(ForumChannelReadState.channel_id == channel_id)
+    ).first()
+    if rs is None:
+        session.add(
+            ForumChannelReadState(
+                user_id=user_id,  # type: ignore[arg-type]
+                channel_id=channel_id,  # type: ignore[arg-type]
+                last_read_message_id=target,
+            )
+        )
+    elif rs.last_read_message_id < target:
+        rs.last_read_message_id = target
+        session.add(rs)
 
 
 # ─── Muten (persönliche Spam-Abmeldung) ───────────────────────────
