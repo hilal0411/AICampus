@@ -10,6 +10,7 @@ Diese Endpunkte sind unter /api/courses/{course_id}/members erreichbar.
 
 from datetime import datetime
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel
 from sqlmodel import Session, select
 
 from database.base import get_session
@@ -21,6 +22,7 @@ from database.models import (
     User,
     UserCourse,
 )
+from services import course_service
 from services.auth_service import get_current_user
 from services.timeutil import utc_iso
 
@@ -323,7 +325,81 @@ async def update_course_name(
     }
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════
+# KURS DUPLIZIEREN / LÖSCHEN
+# ═══════════════════════════════════════════════════════════════
+
+class CourseDuplicateRequest(BaseModel):
+    name: str
+    description: str
+    semester: str
+
+
+@router.post("/courses/{course_id}/duplicate")
+async def duplicate_course(
+    course_id: int,
+    data: CourseDuplicateRequest,
+    session: Session = Depends(get_session),
+    auth_result: tuple = Depends(require_prof_or_admin()),
+):
+    """Kurs duplizieren — z. B. für das nächste Semester (PROF oder Admin).
+
+    Kopiert die Kurs-Materialien (Skript, Slides, Aufgaben, Medien,
+    Einstellungen) — aber keine Studierenden-Daten (Mitglieder, Einreichungen).
+    """
+    user, _, _ = auth_result
+    course = session.get(Course, course_id)
+    if not course:
+        raise HTTPException(404, "Kurs nicht gefunden.")
+
+    result = course_service.duplicate_course_content(
+        session, user, course, data.name, data.description, data.semester
+    )
+    new_course = result["course"]
+    return {
+        "message": f"Kurs '{data.name}' aus '{course.name}' dupliziert.",
+        "course": {
+            "id": new_course.id,
+            "name": new_course.name,
+            "semester": new_course.semester,
+            "task_count": result["task_count"],
+            "section_count": result["section_count"],
+            "material_count": result["material_count"],
+            "media_count": result["media_count"],
+        },
+    }
+
+
+class DeleteCourseRequest(BaseModel):
+    confirm: str
+
+
+@router.delete("/courses/{course_id}")
+async def delete_course(
+    course_id: int,
+    data: DeleteCourseRequest,
+    session: Session = Depends(get_session),
+    auth_result: tuple = Depends(require_prof_or_admin()),
+):
+    """Kurs in den Papierkorb legen (PROF oder Admin).
+
+    Soft Delete: alle Inhalte bleiben erhalten und können (von Admins)
+    wiederhergestellt werden. Bestätigung: exakt 'DELETE' eingeben.
+    """
+    if data.confirm.strip() != "DELETE":
+        raise HTTPException(
+            400, "Bestätigung unvollständig: 'DELETE' eingeben, um zu bestätigen."
+        )
+
+    course = session.get(Course, course_id)
+    if not course:
+        raise HTTPException(404, "Kurs nicht gefunden.")
+
+    name = course_service.soft_delete_course(session, course)
+    return {"message": f"Kurs '{name}' in den Papierkorb gelegt."}
+
+
+# ═══════════════════════════════════════════════════════════════
 # USER-SUCHE (damit PROF/Admin User finden kann, um sie hinzuzufügen)
 # ═══════════════════════════════════════════════════════════════════
 

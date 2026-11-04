@@ -57,6 +57,49 @@
         </form>
       </div>
 
+      <!-- ─── Kurs duplizieren ─── -->
+      <div class="card py-6 mt-6">
+        <h3 class="text-sm font-semibold text-gray-700">Kurs duplizieren</h3>
+        <p class="text-xs text-gray-400 mt-1 mb-3">
+          Kopie dieses Kurses anlegen (z. B. für das nächste Semester):
+          Skript, Slides, Übungsaufgaben, Medien, Quellen und Einstellungen
+          werden kopiert. Studierenden-Daten (Mitglieder, Einreichungen)
+          bleiben im Original.
+        </p>
+        <button type="button" onclick="showDuplicateCourseModal()"
+                class="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700 transition font-semibold">
+          📋 Kurs duplizieren
+        </button>
+      </div>
+
+      <!-- ─── Dangerzone ─── -->
+      <div class="bg-white rounded-xl shadow-md border border-red-200 p-6 mt-6">
+        <h3 class="text-sm font-semibold text-red-600">⚠️ Dangerzone</h3>
+        <p class="text-xs text-gray-500 mt-1 mb-3">
+          Der Kurs wird in den Papierkorb gelegt (Soft Delete): alle Inhalte
+          bleiben erhalten und können bis zur endgültigen Löschung (nur per
+          CLI) von einem Admin wiederhergestellt werden.
+        </p>
+        <div class="flex flex-col sm:flex-row gap-3">
+          <input
+            type="text"
+            id="delete_course_confirm"
+            placeholder="DELETE"
+            autocomplete="off"
+            spellcheck="false"
+            class="flex-1 rounded-lg border border-gray-300 px-4 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent">
+          <button
+            type="button"
+            onclick="deleteCourse()"
+            class="bg-red-600 hover:bg-red-700 text-white px-5 py-2 rounded-lg text-sm font-medium transition shrink-0">
+            Kurs löschen
+          </button>
+        </div>
+        <p class="text-xs text-gray-400 mt-2">
+          Gib <strong>DELETE</strong> ein, um die Löschung zu bestätigen.
+        </p>
+      </div>
+
     </div>
   </div>
 
@@ -310,6 +353,8 @@
     let engines = [];       // effektive Liste: [{name,url,key,gpus,scope,editable,healthy,…}]
                            // gpus = GPU-Regel der Engine (editierbar, Kurs nur)
     let engineStatus = {};  // name → Health-Dict (gpus = detektierte GPUs)
+    let engineSessions = {};  // name → [{key, image, task, user}] (nur KURSSessions)
+    let sessionsLoaded = false;
     let specsCache = null;  // Promise: Kurs- + globale Specs für den Install-Picker
     let saving = false;
 
@@ -356,6 +401,7 @@
           return e;
         });
         renderCourseEngines();
+        loadEngineSessions();
       } catch (err) {
         showToast('Compute-Engines konnten nicht geladen werden: ' + err.message, 'error');
       }
@@ -411,6 +457,93 @@
         const a = engines[i];
         updateEngineStatus(wrap, a && a.name ? engineStatus[a.name] : null, i);
       });
+      loadEngineSessions();
+    }
+
+    // ─── Sessions je Engine (nur KURSSessions) ──────────────────────
+    // Chips in der Engine-Zeile (▶ aktiv / ⏸ inaktiv) + Listen im
+    // Details: Aufgabe, Student, Image, RAM (aktiv) und Disk (beide;
+    // der Agent misst beides im 10-s-Zyklus, Disk hostseitig am Volume).
+    // Ein Call für alle Engines (GET /compute/sessions).
+    function fmtBytes(n) {
+      if (n == null || !isFinite(n)) { return ''; }
+      const u = ['B', 'KB', 'MB', 'GB', 'TB'];
+      let i = 0, v = Number(n);
+      while (v >= 1024 && i < u.length - 1) { v /= 1024; i++; }
+      return (v >= 100 ? Math.round(v) : v.toFixed(1)) + ' ' + u[i];
+    }
+    function fmtLastActivity(ts) {
+      if (!ts) { return ''; }
+      const d = new Date(ts * 1000);
+      if (isNaN(d.getTime())) { return ''; }
+      return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+    }
+    function sessionUsageHtml(s) {
+      const parts = [];
+      if (s.active && s.mem != null) { parts.push('RAM ' + fmtBytes(s.mem)); }
+      if (s.disk != null) {
+        const q = s.disk_quota_mb ? ' / ' + fmtBytes(s.disk_quota_mb * 1024 * 1024) : '';
+        parts.push('Disk ' + fmtBytes(s.disk) + q);
+      }
+      if (!s.active) {
+        const la = fmtLastActivity(s.last_activity);
+        if (la) { parts.push('zuletzt ' + la); }
+      }
+      return parts.length ? '<span class="flex-shrink-0 text-gray-400 tabular-nums">' + parts.join(' · ') + '</span>' : '';
+    }
+    function sessionRowHtml(s) {
+      return '<div class="px-1.5 py-1 rounded hover:bg-gray-100">' +
+        '<div class="flex items-baseline gap-2">' +
+        '<span class="flex-shrink-0 text-[10px]">' + (s.active ? '🟢' : '⏸') + '</span>' +
+        '<span class="truncate text-gray-700" title="' + escHtml(s.task) + '">' + escHtml(s.task || '(unbekannte Aufgabe)') + '</span>' +
+        '<span class="min-w-0 truncate text-gray-500" title="' + escHtml(s.user) + '">' + escHtml(s.user || '?') + '</span>' +
+        sessionUsageHtml(s) +
+        '</div>' +
+        (s.image ? '<div class="pl-5 truncate text-[10px] font-mono text-gray-400" title="' + escHtml(s.image) + '">' + escHtml(s.image) + '</div>' : '') +
+        '</div>';
+    }
+    function renderEngineSessions(wrap) {
+      const name = wrap.dataset.name;
+      const sess = (name && engineSessions[name]) || [];
+      const active = sess.filter(s => s.active);
+      const idle = sess.filter(s => !s.active).sort((a, b) => (b.last_activity || 0) - (a.last_activity || 0));
+      const chip = wrap.querySelector('.eng-sess');
+      if (chip) {
+        chip.textContent = '▶ ' + active.length;
+        chip.title = active.length + (active.length === 1 ? ' aktive Session' : ' aktive Sessions') + ' (Kurs) auf dieser Engine';
+        chip.classList.toggle('hidden', !active.length);
+      }
+      const idleChip = wrap.querySelector('.eng-sess-idle');
+      if (idleChip) {
+        idleChip.textContent = '⏸ ' + idle.length;
+        idleChip.title = idle.length + (idle.length === 1 ? ' inaktive Session' : ' inaktive Sessions') + ' (gestoppt — Dateien bleiben auf der Disk)';
+        idleChip.classList.toggle('hidden', !idle.length);
+      }
+      const listEl = wrap.querySelector('.eng-sess-list');
+      if (!listEl) { return; }
+      if (!sessionsLoaded) { listEl.textContent = '…'; return; }
+      if (!sess.length) { listEl.textContent = 'Keine Sessions.'; return; }
+      listEl.innerHTML =
+        '<div class="text-[10px] uppercase tracking-wide text-gray-400 font-semibold mb-0.5">Aktiv (' + active.length + ')</div>' +
+        (active.length ? active.map(sessionRowHtml).join('') : '<div class="text-gray-400 px-1.5 py-0.5">Keine.</div>') +
+        '<div class="text-[10px] uppercase tracking-wide text-gray-400 font-semibold mt-2 mb-0.5">Inaktiv (' + idle.length + ')</div>' +
+        (idle.length ? idle.map(sessionRowHtml).join('') : '<div class="text-gray-400 px-1.5 py-0.5">Keine.</div>');
+    }
+
+    async function loadEngineSessions() {
+      try {
+        const res = await fetch(api + '/compute/sessions', { credentials: 'same-origin' });
+        if (!res.ok) { throw new Error(res.status); }
+        const data = await res.json();
+        engineSessions = {};
+        (data.agents || []).forEach(a => { engineSessions[a.name] = a.sessions || []; });
+        sessionsLoaded = true;
+      } catch (err) {
+        engineSessions = {};
+      }
+      const list = document.getElementById('course-engine-list');
+      if (!list) { return; }
+      Array.from(list.children).forEach(wrap => renderEngineSessions(wrap));
     }
 
     function updateEngineStatus(wrap, st, i) {
@@ -563,6 +696,8 @@
           badge +
           '<span class="eng-gpu hidden text-[10px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-700 whitespace-nowrap flex-shrink-0"></span>' +
           '<span class="eng-ver hidden text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-600 font-mono whitespace-nowrap flex-shrink-0"></span>' +
+          '<span class="eng-sess hidden text-[10px] px-1.5 py-0.5 rounded bg-sky-100 text-sky-700 whitespace-nowrap flex-shrink-0" title="Aktive Sessions"></span>' +
+          '<span class="eng-sess-idle hidden text-[10px] px-1.5 py-0.5 rounded bg-gray-100 text-gray-500 whitespace-nowrap flex-shrink-0" title="Inaktive Sessions (Container gestoppt, Dateien bleiben auf der Disk)"></span>' +
           '<span class="ml-auto flex items-center gap-2 flex-shrink-0">' +
           '<button class="eng-test text-xs px-2 py-1 rounded border border-blue-200 text-blue-600 hover:bg-blue-50" title="Verbindung testen">🧪</button>' +
           '<svg class="eng-chevron h-5 w-5 text-gray-400 flex-shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>' +
@@ -571,6 +706,11 @@
           '<div class="px-4 pb-4 pt-3 border-t border-gray-100">' +
           '<div class="grid gap-2 sm:grid-cols-2 mb-3">' + urlField + keyField + '</div>' +
           '<div class="eng-gpus mb-3"></div>' +
+          '<div class="flex items-center justify-between mb-1">' +
+          '<span class="text-xs font-medium text-gray-600">Sessions (Kurs)</span>' +
+          '<button class="eng-sess-refresh px-1.5 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100" title="Sessions neu laden">⟳</button>' +
+          '</div>' +
+          '<div class="eng-sess-list border border-gray-200 rounded bg-gray-50 p-2 text-xs text-gray-500 min-h-[2rem] mb-3">…</div>' +
           '<div class="flex items-center justify-between mb-1">' +
           '<span class="text-xs font-medium text-gray-600">Images auf „' + escHtml(a.name || a.url) + '“' + (isCourse ? '' : ' (read-only)') + '</span>' +
           '<button class="eng-imgs-refresh px-1.5 py-0.5 rounded border border-gray-300 text-gray-600 hover:bg-gray-100" title="Images neu laden">⟳</button>' +
@@ -601,6 +741,7 @@
           d.querySelector('.eng-imgs-add').onclick = () => installEngineImage(d, i);
         }
         d.querySelector('.eng-test').onclick = () => testCourseEngine(i);
+        d.querySelector('.eng-sess-refresh').onclick = () => loadEngineSessions();
         d.querySelector('.eng-imgs-refresh').onclick = () => loadEngineImages(d, i);
         // Images lazy laden: erst beim ersten Aufklappen der Zeile
         d.addEventListener('toggle', () => {
@@ -608,6 +749,7 @@
         });
         updateEngineSpecOptions(d, {});
         updateEngineStatus(d, engineStatus[a.name] || null, i);
+        renderEngineSessions(d);
         list.appendChild(d);
       });
     }
@@ -2689,4 +2831,132 @@
 
     </div><!-- /content area -->
   </div><!-- /grid -->
+
+  <!-- ─── Duplicate Course Modal ─── -->
+  <div id="duplicate-course-modal" class="hidden fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center">
+    <div class="bg-white rounded-xl shadow-xl p-6 w-full max-w-md">
+      <h3 class="text-lg font-bold text-gray-900 mb-2">Kurs duplizieren</h3>
+      <p class="text-sm text-gray-500 mb-4">Original: {{ course.name }}</p>
+
+      <div class="space-y-4">
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Kursname <span class="text-red-500">*</span></label>
+          <input type="text" id="duplicate-course-name" placeholder="Einführung in die Informatik (Kopie)"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Beschreibung</label>
+          <textarea id="duplicate-course-desc" rows="2" placeholder="Kurze Beschreibung..."
+                    class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm"></textarea>
+        </div>
+        <div>
+          <label class="block text-sm font-medium text-gray-700 mb-1">Semester <span class="text-red-500">*</span></label>
+          <input type="text" id="duplicate-course-semester" placeholder="WS 2025/26"
+                 class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm">
+        </div>
+      </div>
+
+      <div class="flex justify-end gap-3 mt-6">
+        <button onclick="closeDuplicateCourseModal()" class="text-gray-600 hover:text-gray-800 px-4 py-2">Abbrechen</button>
+        <button onclick="duplicateCourse()" class="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700">Duplizieren</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+  // ─── Kurs duplizieren ──────────────────────────────────────────
+  const duplicateDefaults = {
+    name: {{ course.name | tojson }},
+    description: {{ course.description | tojson }},
+    semester: {{ course.semester | tojson }},
+  };
+
+  function showDuplicateCourseModal() {
+    document.getElementById('duplicate-course-name').value = duplicateDefaults.name + ' (Kopie)';
+    document.getElementById('duplicate-course-desc').value = duplicateDefaults.description;
+    document.getElementById('duplicate-course-semester').value = duplicateDefaults.semester;
+    document.getElementById('duplicate-course-modal').classList.remove('hidden');
+  }
+
+  function closeDuplicateCourseModal() {
+    document.getElementById('duplicate-course-modal').classList.add('hidden');
+    document.getElementById('duplicate-course-name').value = '';
+    document.getElementById('duplicate-course-desc').value = '';
+    document.getElementById('duplicate-course-semester').value = '';
+  }
+
+  async function duplicateCourse() {
+    const name = document.getElementById('duplicate-course-name').value.trim();
+    const description = document.getElementById('duplicate-course-desc').value.trim();
+    const semester = document.getElementById('duplicate-course-semester').value.trim();
+
+    if (!name || !semester) {
+      showToast('Name und Semester sind erforderlich.', 'error');
+      return;
+    }
+
+    try {
+      const res = await fetch('/api/courses/' + courseId + '/duplicate', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, description, semester }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        showToast(data.detail || 'Fehler beim Duplizieren.', 'error');
+        return;
+      }
+
+      const c = data.course || {};
+      const parts = [];
+      if (c.section_count) parts.push(c.section_count + ' Skript-Kapitel');
+      if (c.material_count) parts.push(c.material_count + ' Slide-Decks');
+      if (c.task_count) parts.push(c.task_count + ' Aufgaben');
+      if (c.media_count) parts.push(c.media_count + ' Medien');
+      showToast('Kurs "' + name + '" dupliziert!' + (parts.length ? ' (' + parts.join(', ') + ' kopiert)' : ''), 'success');
+      closeDuplicateCourseModal();
+
+      // Kurs-Liste (Header) + ggf. neue Kurs-Option neu laden
+      window.location.reload();
+    } catch (err) {
+      showToast('Fehler: ' + err.message, 'error');
+    }
+  }
+
+  // ─── Kurs löschen (Dangerzone) ─────────────────────────────────
+  async function deleteCourse() {
+    const confirmValue = document.getElementById('delete_course_confirm').value.trim();
+    if (confirmValue !== 'DELETE') {
+      showToast("Bitte 'DELETE' eingeben, um die Löschung zu bestätigen.", 'warning');
+      return;
+    }
+    if (!confirm('Kurs "' + duplicateDefaults.name + '" in den Papierkorb legen?\n\nAlle Inhalte bleiben erhalten und können von einem Admin wiederhergestellt werden. Eine endgültige Löschung ist nur per CLI möglich.')) return;
+
+    try {
+      const res = await fetch('/api/courses/' + courseId, {
+        method: 'DELETE',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ confirm: 'DELETE' }),
+      });
+
+      let data = {};
+      try {
+        data = await res.json();
+      } catch (_) { /* Nicht-JSON-Antwort (z. B. 500 Plain-Text) */ }
+
+      if (!res.ok) {
+        showToast(data.detail || 'Fehler beim Löschen.', 'error');
+        return;
+      }
+
+      showToast(data.message || 'Kurs in den Papierkorb gelegt.', 'success');
+      setTimeout(() => { window.location.href = '/'; }, 1200);
+    } catch (err) {
+      showToast('Fehler: ' + err.message, 'error');
+    }
+  }
+  </script>
 {% endblock %}

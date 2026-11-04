@@ -17,25 +17,18 @@ from database.soft_delete import SOFT_DELETE_BYPASS
 from database.models import (
     Course,
     CourseCreate,
-    CourseMaterial,
-    CourseReference,
     CourseRole,
     CourseSettings,
     CourseSettingsUpdate,
-    CourseSlidesTheme,
     ForumChannel,
     GlobalSettings,
     GlobalSettingsUpdate,
     GlobalSettingsRead,
     GlobalUserRole,
-    MaterialType,
-    ScriptSection,
-    Task,
     User,
     UserCourse,
 )
 from services import course_service, user_service
-from services import version_service
 from services.timeutil import utc_iso
 from services.auth_service import hash_password, require_global_admin
 from services.llm_service import get_llm_debug_entry, get_llm_debug_log
@@ -129,165 +122,24 @@ async def duplicate_course(
     session: Session = Depends(get_session),
     user: User = Depends(require_global_admin()),
 ):
-    """Kurs duplizieren (Kurs + Tasks + Skript-Kapitel + Slides + Quellen + Settings,
-    ohne Mitglieder/Submissions)."""
+    """Kurs duplizieren (Inhalt + Medien, ohne Mitglieder/Studierende-Daten)."""
     source_course = session.get(Course, course_id)
     if not source_course:
         raise HTTPException(404, "Kurs nicht gefunden.")
 
-    # 1. Neuen Kurs erstellen
-    new_course = Course(
-        name=data.name,
-        description=data.description,
-        semester=data.semester,
-        created_by=user.id,  # type: ignore[arg-type]
+    result = course_service.duplicate_course_content(
+        session, user, source_course, data.name, data.description, data.semester
     )
-    session.add(new_course)
-    session.commit()
-    session.refresh(new_course)
-
-    # 2. Admin als PROF-Mitglied hinzufügen
-    membership = UserCourse(
-        user_id=user.id,  # type: ignore[arg-type]
-        course_id=new_course.id,  # type: ignore[arg-type]
-        role_in_course=CourseRole.PROF,
-    )
-    session.add(membership)
-    session.commit()
-
-    # 3. Alle Tasks kopieren (ohne Submissions/Feedback)
-    source_tasks = session.exec(select(Task).where(Task.course_id == course_id)).all()
-    new_tasks: list[Task] = []
-    for src_task in source_tasks:
-        new_task = Task(
-            course_id=new_course.id,  # type: ignore[arg-type]
-            title=src_task.title,
-            task_type=src_task.task_type,
-            description=src_task.description,
-            model_solution=src_task.model_solution,
-            max_points=src_task.max_points,
-            max_attempts=src_task.max_attempts,
-            deadline=src_task.deadline,
-            text_template=src_task.text_template,
-            is_visible=src_task.is_visible,
-            hints_enabled=src_task.hints_enabled,
-            auto_grading_enabled=src_task.auto_grading_enabled,
-            created_by=user.id,  # type: ignore[arg-type]
-        )
-        session.add(new_task)
-        new_tasks.append(new_task)
-    session.commit()
-    for t in new_tasks:
-        version_service.mark_created(session, user, "task", t.id)
-
-    # 4. CourseSettings kopieren
-    source_settings = session.exec(
-        select(CourseSettings).where(CourseSettings.course_id == course_id)
-    ).first()
-    if source_settings:
-        new_settings = CourseSettings(
-            course_id=new_course.id,  # type: ignore[arg-type]
-            llm_api_url=source_settings.llm_api_url,
-            llm_model=source_settings.llm_model,
-            grading_prompt=source_settings.grading_prompt,
-            use_ldap=source_settings.use_ldap,
-            ldap_server=source_settings.ldap_server,
-            ldap_base_dn=source_settings.ldap_base_dn,
-            ldap_bind_dn=source_settings.ldap_bind_dn,
-            ldap_bind_pw=source_settings.ldap_bind_pw,
-            ldap_user_search=source_settings.ldap_user_search,
-        )
-        session.add(new_settings)
-        session.commit()
-
-    # 5. Skript-Kapitel kopieren
-    source_sections = session.exec(
-        select(ScriptSection).where(ScriptSection.course_id == course_id)
-    ).all()
-    new_sections: list[ScriptSection] = []
-    for src_section in source_sections:
-        s = ScriptSection(
-            course_id=new_course.id,  # type: ignore[arg-type]
-            title=src_section.title,
-            content=src_section.content,
-            is_visible=src_section.is_visible,
-            display_order=src_section.display_order,
-            summary=src_section.summary,
-            created_by=user.id,  # type: ignore[arg-type]
-        )
-        session.add(s)
-        new_sections.append(s)
-    session.commit()
-    for s in new_sections:
-        version_service.mark_created(session, user, "script_section", s.id)
-
-    # 6. Materialien (Slide-Decks) kopieren
-    source_materials = session.exec(
-        select(CourseMaterial).where(CourseMaterial.course_id == course_id)
-    ).all()
-    new_materials: list[CourseMaterial] = []
-    for src_material in source_materials:
-        m = CourseMaterial(
-            course_id=new_course.id,  # type: ignore[arg-type]
-            title=src_material.title,
-            material_type=src_material.material_type,
-            content=src_material.content,
-            is_visible=src_material.is_visible,
-            display_order=src_material.display_order,
-            summary=src_material.summary,
-            created_by=user.id,  # type: ignore[arg-type]
-        )
-        session.add(m)
-        new_materials.append(m)
-    session.commit()
-    for m in new_materials:
-        if m.material_type == MaterialType.SLIDES:
-            version_service.mark_created(session, user, "slide_deck", m.id)
-
-    # 7. Quellen-Referenzen (für @cite:{key} im Inhalt) + Slides-Theme kopieren
-    source_references = session.exec(
-        select(CourseReference).where(CourseReference.course_id == course_id)
-    ).all()
-    new_refs: list[CourseReference] = []
-    for src_ref in source_references:
-        r = CourseReference(
-            course_id=new_course.id,  # type: ignore[arg-type]
-            key=src_ref.key,
-            entry_type=src_ref.entry_type,
-            authors=src_ref.authors,
-            title=src_ref.title,
-            year=src_ref.year,
-            venue=src_ref.venue,
-            detail=src_ref.detail,
-            address=src_ref.address,
-            doi=src_ref.doi,
-            created_by=user.id,  # type: ignore[arg-type]
-        )
-        session.add(r)
-        new_refs.append(r)
-    source_theme = session.exec(
-        select(CourseSlidesTheme).where(CourseSlidesTheme.course_id == course_id)
-    ).first()
-    if source_theme:
-        session.add(
-            CourseSlidesTheme(
-                course_id=new_course.id,  # type: ignore[arg-type]
-                theme=source_theme.theme,
-            )
-        )
-    session.commit()
-    for r in new_refs:
-        version_service.mark_created(session, user, "reference", r.id)
-
+    new_course = result["course"]
     return {
         "message": f"Kurs '{data.name}' aus '{source_course.name}' dupliziert.",
         "course": {
             "id": new_course.id,
             "name": new_course.name,
             "semester": new_course.semester,
-            "task_count": len(source_tasks),
-            "section_count": len(source_sections),
-            "material_count": len(source_materials),
+            "task_count": result["task_count"],
+            "section_count": result["section_count"],
+            "material_count": result["material_count"],
         },
     }
 
@@ -691,6 +543,16 @@ async def compute_status(
     """
     from services.workspace_service import workspace_service
     return workspace_service.status(session)
+
+
+@router.get("/compute/sessions")
+async def compute_sessions(
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_global_admin()),
+):
+    """Laufende Workspace-Sessions je Engine (Kurs/Aufgabe/Student/Image)."""
+    from services.workspace_service import workspace_service
+    return {"agents": workspace_service.engine_sessions(session)}
 
 
 @router.post("/compute/test")
