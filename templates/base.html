@@ -184,10 +184,16 @@
             </button>
           </div>
           <div id="notif-list" class="notif-scroll max-h-96 overflow-y-auto p-1.5 space-y-1"></div>
-          <div class="border-t border-blue-500/50 p-1.5 space-y-0.5">
+          {# Kein p-1.5: Zeile ist bündig (px-3 py-2), damit der Footer
+             exakt so hoch ist wie der Header oben. #}
+          <div class="border-t border-blue-500/50 overflow-hidden rounded-b-[11px]">
             <a href="/notifications/archive"
-               class="flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-blue-200 hover:bg-blue-600 hover:text-white transition">
-              <span class="w-4 shrink-0 text-center">🗂️</span>
+               class="flex items-center gap-2.5 px-3 py-2 text-sm text-blue-200 hover:bg-blue-600 hover:text-white transition">
+              <span class="w-4 shrink-0 flex items-center">
+                <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+                  <path d="m6 14 1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6a2 2 0 0 1-1.95 1.5H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h3.9a2 2 0 0 1 1.69.9l.81 1.2a2 2 0 0 0 1.67.9H18a2 2 0 0 1 2 2v2"/>
+                </svg>
+              </span>
               <span>Nachrichten-Archiv</span>
             </a>
           </div>
