@@ -24,21 +24,37 @@
   </svg>
 {%- endmacro %}
 
+{% block extra_head %}
+<style>
+  /* Mobil: Forum oben an die Tab-Leiste attachen (mb-6 der Leiste → 0;
+     entspricht Tailwind-sm-Grenze 640px, wie im Skript). */
+  @media (max-width: 639px) {
+    #course-tab-bar { margin-bottom: 0; }
+  }
+  /* Footer liegt direkt unter dem Forum: mt-8 des Footer (base.html) und
+     das pb-6 des Main-Containers fallen weg; die my-3 der Forum-Form
+     bildet den Abstand nach unten. */
+  footer.mt-8 { margin-top: 0; }
+  main.container { padding-bottom: 0; }
+</style>
+{% endblock %}
+
 {% block course_content %}
-<div class="flex gap-4" style="height: calc(100vh - 300px); min-height: 420px;">
+{# Mobil: Full-Bleed wie die Skript-Kapitel — -mx-4 hebt das px-4 des
+   Main-Containers auf, Karten verlieren seitliche Ränder/Rundung (ab sm: normal).
+   Unten attacht: JS (forum-fill) zieht die Höhe bis ans Viewport-Ende. #}
+<div id="forum-fill" class="flex gap-4 -mx-4 sm:mx-0" style="height: calc(100vh - 300px); min-height: 420px;">
 
   {# Mobil (< 768 px): Master-Detail — nur Liste ODER nur Chat. #}
   <!-- Sidebar: Kanäle -->
   <aside id="forum-channels-sidebar"
-    class="{% if channel_selected %}hidden md:flex{% else %}flex{% endif %} flex-col w-full md:w-60 shrink-0 bg-white rounded-xl border border-gray-200 overflow-hidden">
+    class="{% if channel_selected %}hidden md:flex{% else %}flex{% endif %} flex-col w-full md:w-60 shrink-0 bg-white border border-gray-200 overflow-hidden rounded-none border-x-0 border-t-0 sm:rounded-xl sm:border-x sm:border-t sm:mb-3">
     <div class="px-3 py-2.5 border-b border-gray-100 flex items-center justify-between">
       <span class="text-sm font-bold text-gray-700 md:text-xs md:uppercase md:tracking-wide md:text-gray-500">Kanäle</span>
       <button type="button" id="channel-add-btn" title="Neuen Kanal anlegen"
         class="w-6 h-6 flex items-center justify-center rounded text-gray-400 hover:bg-gray-100 hover:text-gray-700 text-lg leading-none transition">+</button>
     </div>
-    <p class="md:hidden px-3 pt-1 text-xs text-gray-400">Wähle einen Kanal, um zu chatten.</p>
-
-    <div class="flex-1 overflow-y-auto p-2 space-y-0.5">
+    <div class="forum-scroll flex-1 overflow-y-auto p-2 space-y-0.5">
       {% for ch in forum_channels %}
       {# Zeile = Div (Button darf nicht in <a> verschachtelt werden).
          Gemutete Kanäle: gedimmt, Ungelesen-Badge grau statt rot
@@ -93,12 +109,12 @@
   <div id="forum-chat" class="{% if channel_selected %}flex{% else %}hidden md:flex{% endif %} flex-1 flex-col min-w-0">
     {% if active_channel %}
 
-    <div class="flex items-center gap-2 pb-2 min-w-0">
+    <div class="flex items-center gap-2 py-2 min-w-0 px-4 sm:px-0">
       {% if channel_selected %}
       <a href="/courses/{{ course.id }}/forum"
          class="md:hidden -ml-1 px-2 py-1.5 rounded-lg text-gray-500 hover:bg-gray-100 hover:text-gray-800 transition shrink-0"
          title="Zurück zur Kanal-Liste">
-        <span class="text-xl leading-none">←</span>
+        <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="15 18 9 12 15 6"></polyline></svg>
       </a>
       {% endif %}
       <h2 id="channel-title" class="text-base font-bold text-gray-800 truncate shrink-0"># {{ active_channel.name }}</h2>
@@ -117,7 +133,7 @@
     </div>
 
     <!-- Nachrichten-Liste -->
-    <div id="forum-messages" class="flex-1 overflow-y-auto bg-white rounded-xl border border-gray-200 p-4 space-y-4">
+    <div id="forum-messages" class="forum-scroll flex-1 overflow-y-auto bg-white border border-gray-200 p-4 space-y-4 rounded-none border-x-0 sm:rounded-xl sm:border-x">
       <div id="forum-empty" class="text-center py-12 text-gray-400">
         <div class="text-4xl mb-2">💬</div>
         <p>Noch keine Nachrichten in diesem Kanal.</p>
@@ -126,7 +142,7 @@
     </div>
 
     <!-- Eingabefeld -->
-    <form id="forum-form" class="mt-3 flex items-end gap-2">
+    <form id="forum-form" class="my-3 flex items-end gap-2 px-4 sm:px-0">
       <textarea
         id="forum-input"
         rows="1"
@@ -174,6 +190,19 @@
   const forumInput = document.getElementById('forum-input');
   const forumForm = document.getElementById('forum-form');
   const forumChat = document.getElementById('forum-chat');
+
+  // Mobil: Unten-Attach — das Forum füllt von unter der Tab-Leiste bis ans
+  // Viewport-Ende (keine Seitenhintergrund-/Footer-Band unter der Karte).
+  // Dokument-Koordinate (rect.top + scrollY) → unabhängig von der Scrolllage.
+  const forumFill = document.getElementById('forum-fill');
+  function fitForumHeight() {
+    if (!forumFill || window.innerWidth >= 640) return;
+    const top = forumFill.getBoundingClientRect().top + window.scrollY;
+    forumFill.style.height = Math.max(window.innerHeight - top, 320) + 'px';
+  }
+  window.addEventListener('load', fitForumHeight);
+  window.addEventListener('resize', fitForumHeight);
+  fitForumHeight();
 
   // Ist der Chat-Pan wirklich sichtbar? Auf Mobilgeräten ohne ?channel= ist
   // nur die Kanal-Liste zu sehen — dann dürfen Nachrichten NICHT als gelesen
