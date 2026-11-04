@@ -19,7 +19,7 @@ from datetime import datetime, timedelta
 from typing import Optional, Any
 
 from jinja2 import Template
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, BadRequestError
 from sqlmodel import Session, select
 
 from config import LLM_API_URL, LLM_API_KEY, LLM_MODEL, LLM_TEMPERATURE, LLM_TIMEOUT
@@ -955,6 +955,12 @@ class LLMService:
 
         Nutzt die multimodalen Faehigkeiten des LLM, um das Bild zu analysieren
         und den enthaltenen Text, Graphen und die enthaltene(n) Formel(n) als Markdown mit LaTeX-Code zurueckzugeben.
+
+        Laueft gestreamt, damit bei Timeout die bereits eingetroffene (partialle)
+        Ausgabe erhalten bleibt und im Debug-Log landend — man sieht so, womit
+        sich das Modell aufgehaelt hat. Das Reasoning ist deaktiviert
+        (vLLM chat_template_kwargs): Transkription braucht kein Denken, und
+        gerade das langsame Thinking ueberschritt bisher die Timeout-Schranke.
         """
         client = self._get_client(config)
         model = config.get("model", self.model) if config else self.model
@@ -983,6 +989,31 @@ class LLMService:
             "Nutze ```mermaid ... ``` für Mermaid und $ ... $ fuer inline Math und $$ ... $$ fuer display Math. "
         )
 
+        messages = [
+            {
+                "role": "system",
+                "content": system_prompt,
+            },
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": f"data:{mime_type};base64,{image_base64}"
+                        },
+                    },
+                    {
+                        "type": "text",
+                        "text": image_prompt_text,
+                    },
+                ],
+            },
+        ]
+
+        # Transkription braucht kein Reasoning: Thinking aus (vLLM).
+        no_thinking_body = {"chat_template_kwargs": {"enable_thinking": False}}
+
         deadline = time.monotonic() + timeout
 
         for attempt in range(max_retries):
@@ -992,59 +1023,93 @@ class LLMService:
                 logger.warning(f"convert_image_to_latex total timeout")
                 break
 
+            content_parts: list = []
+            thinking_parts: list = []
+
             try:
                 start = time.time()
 
-                response = await asyncio.wait_for(
-                    client.chat.completions.create(
+                try:
+                    stream = await client.chat.completions.create(
                         model=model,
-                        messages=[
-                            {
-                                "role": "system",
-                                "content": system_prompt,
-                            },
-                            {
-                                "role": "user",
-                                "content": [
-                                    {
-                                        "type": "image_url",
-                                        "image_url": {
-                                            "url": f"data:{mime_type};base64,{image_base64}"
-                                        },
-                                    },
-                                    {
-                                        "type": "text",
-                                        "text": image_prompt_text,
-                                    },
-                                ],
-                            },
-                        ],
+                        messages=messages,
                         temperature=0.0,
-                    ),
-                    timeout=remaining,
+                        stream=True,
+                        extra_body=no_thinking_body,
+                    )
+                except BadRequestError:
+                    # Provider ohne vLLM-Unterstützung lehnt chat_template_kwargs ab
+                    # (z. B. OpenAI) — ohne Thinking-Optimierung erneut versuchen.
+                    stream = await client.chat.completions.create(
+                        model=model,
+                        messages=messages,
+                        temperature=0.0,
+                        stream=True,
+                    )
+
+                stream_task = asyncio.ensure_future(
+                    self._consume_stream(stream, content_parts, thinking_parts)
                 )
+                timer_task = asyncio.ensure_future(asyncio.sleep(remaining))
+                try:
+                    done, _ = await asyncio.wait(
+                        {stream_task, timer_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                    if timer_task in done:
+                        # Timeout: Stream abbrechen, partialle Ausgabe behalten
+                        stream_task.cancel()
+                        try:
+                            await stream_task
+                        except (asyncio.CancelledError, Exception):
+                            pass
+                        partial_content = "".join(content_parts)
+                        partial_thinking = "".join(thinking_parts)
+                        last_content = partial_content or "(keine Antwort — durch Timeout abgebrochen)"
+                        last_thinking = partial_thinking
+                        last_error = (
+                            f"LLM-Timeout: Antwort nicht innerhalb von {timeout}s erhalten "
+                            f"(partiell geloggt: {len(partial_content)} Zeichen Antwort, "
+                            f"{len(partial_thinking)} Zeichen Thinking)"
+                        )
+                        logger.warning(
+                            f"convert_image_to_latex timeout (attempt {attempt+1}/{max_retries}), "
+                            f"partiell: {len(partial_content)} Zeichen Antwort, "
+                            f"{len(partial_thinking)} Zeichen Thinking"
+                        )
+                    else:
+                        stream_task.result()  # wirft Stream-Fehler weiter
+                        elapsed = time.time() - start
+                        total_ms += round(elapsed * 1000)
+                        content = "".join(content_parts).strip()
+                        thinking = "".join(thinking_parts)
+                        last_content = content or "(keine Antwort)"
+                        last_thinking = thinking
 
-                elapsed = time.time() - start
-                total_ms += round(elapsed * 1000)
-                content = response.choices[0].message.content or "(keine Antwort)"
-                last_content = content
-                last_thinking = self._extract_thinking(response)
+                        if is_temp:
+                            await client.close()
 
-                if is_temp:
-                    await client.close()
-
-                record_llm_debug_entry(
-                    label="CONVERT_IMAGE_TO_LATEX", model=model, url=url, is_public=is_public,
-                    system_prompt=system_prompt, prompt=log_prompt,
-                    response=content, thinking=last_thinking,
-                    success=True, latency_ms=total_ms, attempts=attempt + 1,
-                )
-                return {
-                    "success": True,
-                    "data": {"latex": content.strip()},
-                    "latency_ms": round(elapsed * 1000),
-                    "raw_response": content,
-                }
+                        record_llm_debug_entry(
+                            label="CONVERT_IMAGE_TO_LATEX", model=model, url=url, is_public=is_public,
+                            system_prompt=system_prompt, prompt=log_prompt,
+                            response=last_content, thinking=last_thinking,
+                            success=True, latency_ms=total_ms, attempts=attempt + 1,
+                        )
+                        return {
+                            "success": True,
+                            "data": {"latex": content},
+                            "latency_ms": round(elapsed * 1000),
+                            "raw_response": content,
+                        }
+                finally:
+                    if not timer_task.done():
+                        timer_task.cancel()
+                    if not stream_task.done():
+                        stream_task.cancel()
+                        try:
+                            await stream_task
+                        except (asyncio.CancelledError, Exception):
+                            pass
 
             except asyncio.TimeoutError:
                 last_error = f"LLM-Timeout: Antwort nicht innerhalb von {timeout}s erhalten"
@@ -1072,8 +1137,46 @@ class LLMService:
             "error": last_error,
             "data": {"latex": ""},
             "latency_ms": 0,
-            "raw_response": "",
+            "raw_response": last_content,
         }
+
+    @staticmethod
+    async def _consume_stream(stream, content_parts: list, thinking_parts: list) -> None:
+        """Laeuft einen Chat-Completion-Stream ab und sammelt Content/Thinking.
+
+        Die Teil-Listen werden von auessen uebergeben: Wird der Stream bei
+        Timeout gecancelt, bleiben die bereits empfangenen Teile erhalten.
+        """
+        async for chunk in stream:
+            if not chunk.choices:
+                continue
+            delta = chunk.choices[0].delta
+            if delta is None:
+                continue
+            if delta.content:
+                content_parts.append(delta.content)
+            reasoning = LLMService._extract_thinking_delta(delta)
+            if reasoning:
+                thinking_parts.append(reasoning)
+
+    @staticmethod
+    def _extract_thinking_delta(delta) -> str:
+        """Extrahiert optionales Reasoning/Thinking aus einem Streaming-Delta.
+
+        Je nach Provider (z. B. Qwen3 via vLLM/Ollama) liegt das Reasoning in
+        reasoning_content/reasoning — teils nur in model_extra.
+        """
+        for attr in ("reasoning_content", "reasoning"):
+            value = getattr(delta, attr, None)
+            if isinstance(value, str) and value:
+                return value
+        extra = getattr(delta, "model_extra", None)
+        if isinstance(extra, dict):
+            for key in ("reasoning_content", "reasoning"):
+                value = extra.get(key)
+                if isinstance(value, str) and value:
+                    return value
+        return ""
 
     async def _describe_media(
         self,
