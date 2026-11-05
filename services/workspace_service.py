@@ -997,6 +997,11 @@ class WorkspaceService:
     def _restore_backup_if_any(cls, client: ComputeClient, key: str) -> bool:
         """Sleep-Backup in das frische Volume zurückspielen (Student kommt
         zurück nach einem Idle-Sleep)."""
+        if int(key.rsplit("-", 1)[1]) >= cls.REVIEW_KEY_OFFSET:
+            # Review: Zustand kommt aus dem Submission-Snapshot — ein
+            # (historisches) Backup wäre der alte, beworfene Edit-Stand.
+            delete_workspace_backup(key)
+            return False
         tar = workspace_backup_tar(key)
         if not tar.is_file():
             return False

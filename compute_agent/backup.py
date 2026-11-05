@@ -39,6 +39,12 @@ def maybe_sleep_backup(key: str) -> bool:
     from .reaper import REGISTRY  # lazy: reaper importiert dieses Modul
     if not config.AICAMPUS_URL:
         return True  # Feature aus — Volume bleibt (altes Verhalten)
+    _course, _task, student = docker_ops.key_parts(key)
+    if student >= 1_000_000:
+        # Review-Workspace: Zustand kommt aus dem Submission-Snapshot —
+        # Backup wäre reine Verschwendung, Volume einfach weg.
+        docker_ops.remove_volume_only(key)
+        return True
     last = _RETRY_AFTER.get(key)
     if last and time.time() - last < _RETRY_WAIT:
         return False
