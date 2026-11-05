@@ -28,10 +28,11 @@
  * Nummerierte Section: ## Titel {#sec:label}      → "K.N[.M]" vor der Überschrift (h2–h6,
  *                                                            kapitellokal; Kapitelnummer aus dem refmap);
  *                                                            Anker sec:label bzw. sec:{sectionId}-{num}
- * Querverweise:       @fig:label / @eq:label / @tab:label / @sec:label
- *                                                            → klickbares "Abb. N" / "Abb. N a)" (Subfigure-Inner) /
- *                                                            "Gl. N" / "Tab. N" / "Abs. N.M"
- *                                                            (In-Page- oder Kapitel-übergreifender Link, ❓ wenn unbekannt)
+  * Querverweise:       @fig:label / @eq:label / @tab:label / @sec:label
+  *                                                            → klickbares "Abb. N" / "Abb. N a)" (Subfigure-Inner) /
+  *                                                            "Gl. N" / "Tab. N" / "Abs. N.M"
+  *                                                            (In-Page- oder Kapitel-übergreifender Link, ❓ wenn unbekannt);
+  *                                                            auch in Figuren-Captions (Alt-Text) erlaubt (renderCaptionRef)
  *                    @kap:label = Legacy-Alias für @sec:label. Kapitel-Label = {#sec:label}
  *                    als EIGENE ZEILE (erste nicht-leere Zeile) am Kapitelanfang → "Kap. N"
  *                    (verlinkt auf #chapter-{id}); die Label-Zeile wird selbst nicht gerendert
@@ -1283,7 +1284,13 @@ async function renderMarkdown(text, targetElement, options = {}) {
     return num;
   };
   // Zwei einfache Regexes statt einem verschachtelten Monster:
-  const IMG_REF = /!\[([^\]]*)\]\(([^)\s]+)\)/g;
+  // Alt-Text: [^\[\]] oder genau EINE Ebene geklammerte Gruppen ([^\[\]] |
+  // \[[^\]]*\])* — parität mit marked/CommonMark (Link-Text erlaubt eine
+  // Ebene verschachtelte Klammern) UND mit _IMG_RE in services/fig_labels.py.
+  // Ohne die Klammern würde ![…$(\phi = [\phi_0, \phi_1])$…] beim ersten ]
+  // abbrechen → Figur nicht erkannt (unnummeriert, Caption fehlt,
+  // {#fig:label} bleibt literal).
+  const IMG_REF = /!\[((?:[^\[\]]|\[[^\]]*\])*)\]\(([^)\s]+)\)/g;
   // Literale Tails (unbekannte/ungültige Tokens, schlichte <img>): werden
   // vor den Folgeschritten (1f–1k) aus dem Text genommen, damit z. B.
   // {#fragment} im Tail nicht als echtes Fragment-Sentinel interpretiert
@@ -1309,10 +1316,12 @@ async function renderMarkdown(text, targetElement, options = {}) {
   {
     // ACHTUNG: `!` in src ausschließen ([^)\s!]+) — sonst matcht der äußere
     // Komplex-Kopf ![Gesamt]( auf das erste INNER als src (s. _SF_INNER).
+    // Inner-Alt: eine Ebene Klammern wie IMG_REF (s. dort), nicht
+    // capturend (Gruppen-Nummern von SUBFIG_RE bleiben stabil).
     const SUBFIG_INNER_SRC =
-      /!\[[^\]]*\]\([^)\s!]+\)(?:[ \t]*(?:\r?\n[ \t]*)?\{[^{}]*\}){0,6}/.source;
+      /!\[(?:[^\[\]]|\[[^\]]*\])*\]\([^)\s!]+\)(?:[ \t]*(?:\r?\n[ \t]*)?\{[^{}]*\}){0,6}/.source;
     const SUBFIG_RE = new RegExp(
-      String.raw`!\[([^\]]*)\]\([ \t]*(?:\r?\n[ \t]*)?` +
+      String.raw`!\[((?:[^\[\]]|\[[^\]]*\])*)\]\([ \t]*(?:\r?\n[ \t]*)?` +
         String.raw`(` + SUBFIG_INNER_SRC + String.raw`(?:\s+` + SUBFIG_INNER_SRC + String.raw`)+)` +
         String.raw`[ \t]*(?:\r?\n[ \t]*)?\)`,
       'g'
@@ -1975,6 +1984,154 @@ async function renderMarkdown(text, targetElement, options = {}) {
     html = html.replace(`%%LATEX_INLINE_${idx}%%`, _injectMathRefKeys(renderLatexInline(mx.latex), mx.refs));
   });
 
+  // 6a0. Heading-Nummerierung (h2–h6) + {#sec:label}-Anker — VOR den
+  //      Figuren (6a), damit Figuren-Captions (renderCaptionRef) lokale
+  //      @sec:-Nummern (secLabelNumbers) auflösen können; der Rest der
+  //      Xref-Auflösung (6b) funktioniert unverändert weiter.
+  //      Kapitelnummer aus dem refmap (rollenabhängig: Student = veröffentlichte
+  //      Nummerierung). Ohne Kapitel-Kontext (Aufgaben-Seiten, Antwort-Previews)
+  //      → keine Nummer; labelte Sections bekommen trotzdem ihren Anker.
+  const chapterNum = chapterRef && chapterRef.num != null ? chapterRef.num : null;
+  const secLabelNumbers = {};
+  {
+    const frag = document.createElement('div');
+    frag.innerHTML = html;
+    let n2 = 0;
+    let n3 = 0;
+    let n4 = 0;
+    let n5 = 0;
+    let n6 = 0;
+    frag.querySelectorAll('h2, h3, h4, h5, h6').forEach((h) => {
+      let num = null;
+      const lvl = Number(h.tagName.charAt(1));
+      if (lvl === 2) {
+        n2 += 1; n3 = n4 = n5 = n6 = 0;
+      } else if (lvl === 3) {
+        n3 += 1; n4 = n5 = n6 = 0;
+      } else if (lvl === 4) {
+        n4 += 1; n5 = n6 = 0;
+      } else if (lvl === 5) {
+        n5 += 1; n6 = 0;
+      } else {
+        n6 += 1;
+      }
+      if (chapterNum != null) {
+        num = [chapterNum, n2, n3, n4, n5, n6].slice(0, lvl).join('.');
+      }
+      let label = null;
+      const lm = h.innerHTML.match(/\s*\{#sec:([\p{L}0-9_-]+)\}\s*$/u);
+      if (lm) {
+        label = lm[1];
+        h.innerHTML = h.innerHTML.slice(0, lm.index).replace(/\s+$/, '');
+        if (num != null) secLabelNumbers[label] = num;
+      }
+      if (label) {
+        h.id = `sec:${label}`;
+      } else if (num != null && sectionId != null) {
+        h.id = `sec:${sectionId}-${num}`;
+      }
+      if (num != null) {
+        const span = document.createElement('span');
+        span.className = 'aicampus-sec-num';
+        span.textContent = num;
+        const space = document.createTextNode('\u00a0');
+        h.insertBefore(span, h.firstChild);
+        h.insertBefore(space, span.nextSibling);
+      }
+    });
+    html = frag.innerHTML;
+  }
+
+  // Xref-Auflösung für Fließtext (6b) UND Figuren-Captions (renderCaptionRef,
+  // via captionCtx.xrefFor):
+  // 1) in diesem Dokument (nur außerhalb der Slides; dort würde Reveal den
+  //    In-Page-Hash als Folien-Übergang lesen) → In-Page-Anker,
+  // 2) Skript-Ref-Map → direkter Link zum Objekt im Skript (Kapitel-Labels
+  //    (chapter: true) verlinken auf #chapter-{id}, Anzeige „Kap. N"),
+  // 3) Slide-Ref-Map → Link auf die Folie im Slide-Deck („… S{n}"),
+  // 4) aktuelle Folie (nur Slides): im Slide definiert, aber noch NICHT in
+  //    der Refmap (z. B. ungespeichert im Editor) → lokale S-Fallback-Nummer,
+  //    Link auf die aktuelle Folie,
+  // 5) unbekannt → ❓.
+  // @box: zeigt den Box-Typ-Titel an (CALLOUT_TYPES; Typ-Quelle:
+  // Skript-Ref-Map → Slide-Ref-Map → lokal).
+  // tipDollarEsc = $-Escape des data-xref-tip-JSONs: Fließtext (6b) gibt
+  // '$$$$', weil dort html.replace(ph, refHtml) ein Escape-Level isst;
+  // Captions geben '$', weil die figHtml-Ebene (6a: figHtml.replace(/\$/g,
+  // '$$$$')) dasselbe Niveau übernimmt.
+  const resolveXrefHtml = (kindRaw, label, tipDollarEsc) => {
+    const kind = kindRaw === 'kap' ? 'sec' : kindRaw;
+    const local =
+      kind === 'fig' ? figLabelNumbers[label]
+      : kind === 'eq' ? eqLabelNumbers[label]
+      : kind === 'code' ? codeLabelNumbers[label]
+      : kind === 'box' ? boxLabelNumbers[label]
+      : kind === 'tab' ? tabLabelNumbers[label]
+      : secLabelNumbers[label];
+    const g = globalLabels[kind + ':' + label]; // kind-prefixed (s. script-refmap)
+    const sl = slidesLabels[kind + ':' + label]; // typ-qualifiziert (s. slides-refmap)
+    // Hover-Vorschau (refmap-"preview"): zeigt das Zielobjekt beim Hovern an.
+    const tipPreview =
+      (g && g.kind === kind && g.preview) ||
+      (sl && sl.kind === kind && sl.preview) ||
+      null;
+    const tipAttr = tipPreview
+      ? ` data-xref-tip="${JSON.stringify({ k: kind, p: tipPreview })
+          .replace(/&/g, '&amp;')
+          .replace(/"/g, '&quot;')
+          .replace(/\$/g, () => tipDollarEsc)}"`
+      : '';
+    let kindText;
+    if (kind === 'box') {
+      const boxType =
+        (g && g.kind === 'box' && g.type) ||
+        (sl && sl.kind === 'box' && sl.type) ||
+        boxLabelTypes[label] || null;
+      kindText = boxType && CALLOUT_TYPES[boxType] ? CALLOUT_TYPES[boxType].title : 'Box';
+    } else {
+      kindText = kind === 'fig' ? 'Abb.' : kind === 'eq' ? 'Gl.' : kind === 'code' ? 'Code' : kind === 'tab' ? 'Tab.' : 'Abs.';
+    }
+    let refHtml;
+    const useLocalAnchor = kind === 'sec' || !slideMode;
+    const figInner = kind === 'fig' && useLocalAnchor ? figInnerLocal[label] : null;
+    if (useLocalAnchor && figInner && figInner.num != null) {
+      // Subfigure-Inner: „Abb. N a)“ = Komplex-Nummer + Letter, In-Page-Anker.
+      refHtml = `<a href="#fig:${label}" class="aicampus-xref"${tipAttr}>Abb. ${figInner.num} ${figInner.letter})</a>`;
+    } else if (useLocalAnchor && local) {
+      refHtml = `<a href="#${kind}:${label}" class="aicampus-xref"${tipAttr}>${kindText} ${local}</a>`;
+    } else if (g && g.kind === kind) {
+      const cid = (refMap && refMap.courseId) || '';
+      const text = g.chapter ? 'Kap.' : kindText;
+      const anchor = g.chapter ? `chapter-${g.sectionId}` : `${kind}:${label}`;
+      const subSuffix = kind === 'fig' && g.sub ? ` ${g.sub})` : '';
+      refHtml = `<a href="/courses/${cid}/script#${anchor}" class="aicampus-xref"${tipAttr}>${text} ${g.num}${subSuffix}</a>`;
+    } else if (sl && sl.kind === kind) {
+      // Slide-eigenes Objekt (kein Skript-Label): Link auf die Folie.
+      const cid = (slidesRefMap && slidesRefMap.courseId) || (refMap && refMap.courseId) || '';
+      const subSuffix = kind === 'fig' && sl.sub ? ` ${sl.sub})` : '';
+      refHtml = `<a href="/courses/${cid}/slides/${sl.deckId}/present#/${sl.h}/${sl.v}" class="aicampus-xref"${tipAttr}>${kindText} S${sl.num}${subSuffix}</a>`;
+    } else if (slideMode && (local || (kind === 'fig' && figInnerLocal[label]))) {
+      // Im aktuellen Slide definiert, aber noch nicht in der Refmap
+      // (z. B. im Editor gerade erst angelegt und ungespeichert): Nummer
+      // aus der lokalen Extraktion (S-Fallback, dieselbe Zählung wie
+      // Refmap), Link auf die aktuelle Folie — In-Page-Anker sind in
+      // Slides nicht nutzbar (Reveal liest sie als Folien-Übergang).
+      const inner = kind === 'fig' ? figInnerLocal[label] : null;
+      const num = inner && inner.num != null ? inner.num : local;
+      const subSuffix = inner && inner.letter ? ` ${inner.letter})` : '';
+      const href = slidePos ? `#/${slidePos.h}/${slidePos.v}` : null;
+      refHtml = href
+        ? `<a href="${href}" class="aicampus-xref"${tipAttr}>${kindText} ${num}${subSuffix}</a>`
+        : `<span class="aicampus-xref"${tipAttr}>${kindText} ${num}${subSuffix}</span>`;
+    } else {
+      refHtml = `<span class="aicampus-xref-broken" title="Label unbekannt — zugehöriges Objekt fehlt">❓ ${kindRaw}:${label}</span>`;
+    }
+    return refHtml;
+  };
+  // Caption-Pfad (Figuren-Captions + TOC): $-Escape übernimmt die
+  // figHtml-Ebene (s. oben) → hier nur ein $-Niveau.
+  captionCtx.xrefFor = (kind, label) => resolveXrefHtml(kind, label, '$');
+
   // 6a. Restore numbered figures (.html-Medien als interaktives Iframe)
   //     {.height=X} (px, Max-Höhe) / {.zoom=X} wirken in Slides UND Skript.
   //     !important: schlägt die generischen img-/applet-Regeln aus
@@ -2220,61 +2377,6 @@ async function renderMarkdown(text, targetElement, options = {}) {
     html = html.replace(`%%SUBFIG_${idx}%%`, figHtml.replace(/\$/g, '$$$$'));
   });
 
-  // 6a3. Heading-Nummerierung (h2–h6) + {#sec:label}-Anker
-  //      Kapitelnummer aus dem refmap (rollenabhängig: Student = veröffentlichte
-  //      Nummerierung). Ohne Kapitel-Kontext (Aufgaben-Seiten, Antwort-Previews)
-  //      → keine Nummer; labelte Sections bekommen trotzdem ihren Anker.
-  const chapterNum = chapterRef && chapterRef.num != null ? chapterRef.num : null;
-  const secLabelNumbers = {};
-  {
-    const frag = document.createElement('div');
-    frag.innerHTML = html;
-    let n2 = 0;
-    let n3 = 0;
-    let n4 = 0;
-    let n5 = 0;
-    let n6 = 0;
-    frag.querySelectorAll('h2, h3, h4, h5, h6').forEach((h) => {
-      let num = null;
-      const lvl = Number(h.tagName.charAt(1));
-      if (lvl === 2) {
-        n2 += 1; n3 = n4 = n5 = n6 = 0;
-      } else if (lvl === 3) {
-        n3 += 1; n4 = n5 = n6 = 0;
-      } else if (lvl === 4) {
-        n4 += 1; n5 = n6 = 0;
-      } else if (lvl === 5) {
-        n5 += 1; n6 = 0;
-      } else {
-        n6 += 1;
-      }
-      if (chapterNum != null) {
-        num = [chapterNum, n2, n3, n4, n5, n6].slice(0, lvl).join('.');
-      }
-      let label = null;
-      const lm = h.innerHTML.match(/\s*\{#sec:([\p{L}0-9_-]+)\}\s*$/u);
-      if (lm) {
-        label = lm[1];
-        h.innerHTML = h.innerHTML.slice(0, lm.index).replace(/\s+$/, '');
-        if (num != null) secLabelNumbers[label] = num;
-      }
-      if (label) {
-        h.id = `sec:${label}`;
-      } else if (num != null && sectionId != null) {
-        h.id = `sec:${sectionId}-${num}`;
-      }
-      if (num != null) {
-        const span = document.createElement('span');
-        span.className = 'aicampus-sec-num';
-        span.textContent = num;
-        const space = document.createTextNode('\u00a0');
-        h.insertBefore(span, h.firstChild);
-        h.insertBefore(space, span.nextSibling);
-      }
-    });
-    html = frag.innerHTML;
-  }
-
   // 6b. Restore cross-references (@fig:label / @eq:label / @code:label /
   //     @box:label / @tab:label / @sec:label; @kap:label = Legacy-Alias für @sec:label)
   //     Auflösung: 1) in diesem Dokument (nur außerhalb der Slides: dort
@@ -2333,75 +2435,10 @@ async function renderMarkdown(text, targetElement, options = {}) {
       html = html.replace(`%%XREF_${idx}%%`, refHtml);
       return;
     }
-    const local =
-      kind === 'fig' ? figLabelNumbers[x.label]
-      : kind === 'eq' ? eqLabelNumbers[x.label]
-      : kind === 'code' ? codeLabelNumbers[x.label]
-      : kind === 'box' ? boxLabelNumbers[x.label]
-      : kind === 'tab' ? tabLabelNumbers[x.label]
-      : secLabelNumbers[x.label];
-    const g = globalLabels[kind + ':' + x.label]; // kind-prefixed (s. script-refmap)
-    const sl = slidesLabels[kind + ':' + x.label]; // typ-qualifiziert (s. slides-refmap)
-    // Hover-Vorschau (refmap-"preview"): zeigt das Zielobjekt beim Hovern an.
-    // JSON im data-Attribut: &/-"-Escape für HTML (beim getAttribute wird das
-    // automatisch zurück-dekodiert), $$-Escape, damit der
-    // html.replace(`%%XREF_${idx}%%`, …) unten keine $-Backrefs einliest.
-    const tipPreview =
-      (g && g.kind === kind && g.preview) ||
-      (sl && sl.kind === kind && sl.preview) ||
-      null;
-    const tipAttr = tipPreview
-      ? ` data-xref-tip="${JSON.stringify({ k: kind, p: tipPreview })
-          .replace(/&/g, '&amp;')
-          .replace(/"/g, '&quot;')
-          .replace(/\$/g, '$$$$')}"`
-      : '';
-    let kindText;
-    if (kind === 'box') {
-      const boxType =
-        (g && g.kind === 'box' && g.type) ||
-        (sl && sl.kind === 'box' && sl.type) ||
-        boxLabelTypes[x.label] || null;
-      kindText = boxType && CALLOUT_TYPES[boxType] ? CALLOUT_TYPES[boxType].title : 'Box';
-    } else {
-      kindText = kind === 'fig' ? 'Abb.' : kind === 'eq' ? 'Gl.' : kind === 'code' ? 'Code' : kind === 'tab' ? 'Tab.' : 'Abs.';
-    }
-    let refHtml;
-    const useLocalAnchor = kind === 'sec' || !slideMode;
-    const figInner = kind === 'fig' && useLocalAnchor ? figInnerLocal[x.label] : null;
-    if (useLocalAnchor && figInner && figInner.num != null) {
-      // Subfigure-Inner: „Abb. N a)“ = Komplex-Nummer + Letter, In-Page-Anker.
-      refHtml = `<a href="#fig:${x.label}" class="aicampus-xref"${tipAttr}>Abb. ${figInner.num} ${figInner.letter})</a>`;
-    } else if (useLocalAnchor && local) {
-      refHtml = `<a href="#${kind}:${x.label}" class="aicampus-xref"${tipAttr}>${kindText} ${local}</a>`;
-    } else if (g && g.kind === kind) {
-      const cid = (refMap && refMap.courseId) || '';
-      const text = g.chapter ? 'Kap.' : kindText;
-      const anchor = g.chapter ? `chapter-${g.sectionId}` : `${kind}:${x.label}`;
-      const subSuffix = kind === 'fig' && g.sub ? ` ${g.sub})` : '';
-      refHtml = `<a href="/courses/${cid}/script#${anchor}" class="aicampus-xref"${tipAttr}>${text} ${g.num}${subSuffix}</a>`;
-    } else if (sl && sl.kind === kind) {
-      // Slide-eigenes Objekt (kein Skript-Label): Link auf die Folie.
-      const cid = (slidesRefMap && slidesRefMap.courseId) || (refMap && refMap.courseId) || '';
-      const subSuffix = kind === 'fig' && sl.sub ? ` ${sl.sub})` : '';
-      refHtml = `<a href="/courses/${cid}/slides/${sl.deckId}/present#/${sl.h}/${sl.v}" class="aicampus-xref"${tipAttr}>${kindText} S${sl.num}${subSuffix}</a>`;
-    } else if (slideMode && (local || (kind === 'fig' && figInnerLocal[x.label]))) {
-      // Im aktuellen Slide definiert, aber noch nicht in der Refmap
-      // (z. B. im Editor gerade erst angelegt und ungespeichert): Nummer
-      // aus der lokalen Extraktion (S-Fallback, dieselbe Zählung wie
-      // Refmap), Link auf die aktuelle Folie — In-Page-Anker sind in
-      // Slides nicht nutzbar (Reveal liest sie als Folien-Übergang).
-      const inner = kind === 'fig' ? figInnerLocal[x.label] : null;
-      const num = inner && inner.num != null ? inner.num : local;
-      const subSuffix = inner && inner.letter ? ` ${inner.letter})` : '';
-      const href = slidePos ? `#/${slidePos.h}/${slidePos.v}` : null;
-      refHtml = href
-        ? `<a href="${href}" class="aicampus-xref"${tipAttr}>${kindText} ${num}${subSuffix}</a>`
-        : `<span class="aicampus-xref"${tipAttr}>${kindText} ${num}${subSuffix}</span>`;
-    } else {
-      refHtml = `<span class="aicampus-xref-broken" title="Label unbekannt — zugehöriges Objekt fehlt">❓ ${x.kind}:${x.label}</span>`;
-    }
-    html = html.replace(`%%XREF_${idx}%%`, refHtml);
+    // Auflösung + Hover-Vorschau: resolveXrefHtml (gleiche Logik wie
+    // Figuren-Captions, s. dort). '$$$$' = ein $-Escape-Level, das dieser
+    // html.replace isst (data-xref-tip-Konvention: $$ pro Formel-$).
+    html = html.replace(`%%XREF_${idx}%%`, resolveXrefHtml(x.kind, x.label, '$$$$'));
   });
 
   // 6b. Quellenverzeichnis: „Quellen“-Liste ans Dokument-Ende (nur bei options.bibliography
@@ -3191,8 +3228,10 @@ function renderLatexInline(latex) {
 // Zitations-Link-HTML (Fließtext UND Figuren-Captions, s. renderCaptionRef):
 // @cite → Superscript "[N]", @citet → "Autor (Jahr)", @citep → "(Autor, Jahr)";
 // unbekannter Key → ❓-Marker (wie im Fließtext). tipAttr = optionales
-// data-xref-tip-Attribut (nur Fließtext-Pfad; Caption-HTML läuft durch
-// html.replace, wo das dortige $$-Escaping es verballern würde).
+// data-xref-tip-Attribut: der Fließtext-Pfad (6b) gibt das $$-Escape im
+// tip-JSON selbst mit (seine html.replace isst ein Level); der Caption-Pfad
+// überlässt das Escapen der figHtml-Ebene (6a: figHtml.replace(/\$/g,
+// '$$$$')).
 function _citeHtml(kind, label, r, href, tipAttr) {
   if (!r) {
     return `<span class="aicampus-xref-broken" title="Quellen-Schlüssel unbekannt — es existiert keine solche Quelle im Kurs">❓ ${kind}:${label}</span>`;
@@ -3223,17 +3262,23 @@ function renderCaptionMath(text) {
 }
 
 // Caption-Text rendern: inline-Math ($...$) + Zitationen (@cite / @citet /
-// @citep — für Figuren-Captions; Box-/Code-/Tabellen-Captions bleiben
-// Math-only). ctx = captionCtx aus renderMarkdown: { refMap, citedRefs,
-// hrefFor }; null/undefined → Math-only wie renderCaptionMath. Zitierte
+// @citep) + Querverweise (@fig:/@eq:/@code:/@box:/@tab:/@sec: — und das
+// Legacy-Alias @kap:), alles wie im Fließtext (Auflösungsreihenfolge s.
+// resolveXrefHtml in renderMarkdown). Box-/Code-/Tabellen-Captions bleiben
+// Math-only (dort kein ctx → keine Refs).
+// ctx = captionCtx aus renderMarkdown: { refMap, citedRefs, hrefFor,
+// xrefFor }; null/undefined → Math-only wie renderCaptionMath. Zitierte
 // Quellen landen in ctx.citedRefs → Quellenverzeichnis (bzw. auto-Quellen-
 // Folie in Slides, die den rohen Markdown-Alt-Text selbst scannt).
+// xrefFor(kind, label) rendert den Xref-HTML; fehlt es (z. B. TOC-Links,
+// wo ein Xref eine verschachtelte <a> wäre), bleibt der Token als
+// escaped Text stehen.
 function renderCaptionRef(text, ctx) {
   if (text == null) return '';
   text = String(text);
   if (!ctx) return renderCaptionMath(text);
   const refs = (ctx.refMap && ctx.refMap.references) || {};
-  const re = /@(citep|citet|cite):([\p{L}0-9_-]+)/gu;
+  const re = /@(citep|citet|cite|fig|eq|code|box|tab|sec|kap):([\p{L}0-9_-]+)/gu;
   let out = '';
   let last = 0;
   let m;
@@ -3241,9 +3286,15 @@ function renderCaptionRef(text, ctx) {
     out += renderCaptionMath(text.slice(last, m.index));
     const kind = m[1];
     const label = m[2];
-    const r = refs[label];
-    if (r && ctx.citedRefs) ctx.citedRefs.push(r);
-    out += _citeHtml(kind, label, r, ctx.hrefFor ? ctx.hrefFor(label) : '#', '');
+    if (kind === 'cite' || kind === 'citet' || kind === 'citep') {
+      const r = refs[label];
+      if (r && ctx.citedRefs) ctx.citedRefs.push(r);
+      out += _citeHtml(kind, label, r, ctx.hrefFor ? ctx.hrefFor(label) : '#', '');
+    } else if (typeof ctx.xrefFor === 'function') {
+      out += ctx.xrefFor(kind, label);
+    } else {
+      out += escapeHtml('@' + kind + ':' + label);
+    }
     last = m.index + m[0].length;
   }
   return out + renderCaptionMath(text.slice(last));
@@ -3269,7 +3320,8 @@ function _parseSubfigInners(innerText) {
   const inners = [];
   let rest = innerText;
   for (;;) {
-    const m = /^!\[([^\]]*)\]\(([^)\s!]+)\)/.exec(rest);
+    // Alt: eine Ebene Klammern (Parität: IMG_REF, s. Schritt 1e).
+    const m = /^!\[((?:[^\[\]]|\[[^\]]*\])*)\]\(([^)\s!]+)\)/.exec(rest);
     if (!m) return null;
     rest = rest.slice(m[0].length);
     let height = null;

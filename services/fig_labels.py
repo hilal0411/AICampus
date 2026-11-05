@@ -9,6 +9,9 @@ nummeriert — sonst driftet die Refmap davon ab und der Client fällt auf die
 pro-Rendern-S-Zählung zurück (jede Folie zeigt dann „Abb. S1“).
 
 Regeln (Spiegelbild des Clients):
+- Alt-Text: Beliebig, ABER genau EINE Ebene verschachtelter Klammern ist
+  erlaubt ([x] im Alt geht, [[x]] nicht) — Parität zu marked/CommonMark
+  und zu IMG_REF im Client.
 - Einfache Abbildung: ![Alt](src) + Token-Tail. Tail = aufeinanderfolgende
   {…}-Blöcke, durch Leerraum oder genau einen Zeilenumbruch (keine Leerzeile)
   getrennt. Token-Typen (je max. einmal, in BELIEBIGER Reihenfolge):
@@ -60,27 +63,37 @@ def _is_video_src(src: str) -> bool:
         re.search(r"\.(mp4|webm)$", re.split(r"[?#]", src)[0], re.IGNORECASE)
     )
 
+# Alt-Text: [^\[\]] oder genau EINE Ebene geklammerte Gruppen — Parität mit
+# marked/CommonMark (Link-Text erlaubt eine Ebene verschachtelte Klammern)
+# UND mit IMG_REF in markdown-renderer.js. Ohne die Klammern bricht
+# ![…$(\phi = [\phi_0, \phi_1])$…] beim ersten ] ab → Figur nicht erkannt
+# (unnummeriert, Caption fehlt, {#fig:label} bleibt literal).
+_ALT = r"((?:[^\[\]]|\[[^\]]*\])*)"
+
 # Einfache Abbildung (JS IMG_REF): Src = [^)\s]+ (bewusst auch `!` erlaubt —
 # bei unmaskierten ungültigen Komplexen matcht damit der äußere Kopf auf das
 # erste Inner; der Client hat denselben Fall (src.startsWith('!')-Guard),
 # beide Seiten zählen exakt dieselben Labels.
-_IMG_RE = re.compile(r"!\[([^\]]*)\]\(([^)\s]+)\)")
+_IMG_RE = re.compile(r"!\[" + _ALT + r"\]\(([^)\s]+)\)")
 
 # Subfigure-Komplex (JS SUBFIG_RE): je Inner ![Alt](src) + bis zu sechs
 # beliebige {…}-Blöcke (Src schließt `!` aus, damit der äußere Kopf
 # ![Gesamt]( nicht auf das erste Inner matcht). Die Validierung der Innere
 # (nur height/fig erlaubt) passiert in _subfig_inners() — wie im Client
 # (SUBFIG_RE matcht lose, _parseSubfigInners validiert streng).
-_INNER_SRC = r"!\[[^\]]*\]\([^)\s!]+\)(?:" + _GAP + r"\{[^{}]*\}){0,6}"
+# Inner-Alt: eine Ebene Klammern wie _ALT, aber NICHT capturend (die
+# Gruppen-Nummern von _SUBFIG_ANY_RE bleiben stabil: 1 = äußere Caption,
+# 2 = Inner-Sequenz).
+_INNER_SRC = r"!\[(?:[^\[\]]|\[[^\]]*\])*\]\([^)\s!]+\)(?:" + _GAP + r"\{[^{}]*\}){0,6}"
 _SUBFIG_ANY_RE = re.compile(
-    r"!\[([^\]]*)\]\([ \t]*(?:\r?\n[ \t]*)?("
+    r"!\[" + _ALT + r"\]\([ \t]*(?:\r?\n[ \t]*)?("
     + _INNER_SRC
     + r"(?:[ \t\r\n]+"
     + _INNER_SRC
     + r")+"
     + r")[ \t]*(?:\r?\n[ \t]*)?\)"
 )
-_INNER_HEAD_RE = re.compile(r"!\[([^\]]*)\]\(([^)\s!]+)\)")
+_INNER_HEAD_RE = re.compile(r"!\[" + _ALT + r"\]\(([^)\s!]+)\)")
 _INNER_WS_RE = re.compile(r"[ \t\r\n]+")
 
 
