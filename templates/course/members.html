@@ -24,19 +24,22 @@
       <div class="card overflow-hidden">
         <div class="overflow-x-auto">
         <table class="w-full text-sm min-w-[760px]">
-          <thead class="bg-gray-100 text-gray-600">
+          <thead id="member-table-header" class="bg-gray-100 text-gray-600">
             <tr>
-              <th class="text-left px-4 py-2 font-semibold">Name</th>
-              <th class="text-left px-4 py-2 font-semibold">Username</th>
-              <th class="text-left px-4 py-2 font-semibold">Gruppe</th>
-              <th class="text-center px-4 py-2 font-semibold">Rolle</th>
+              <th data-sort="name" title="Klicken zum Sortieren" class="text-left px-4 py-2 font-semibold cursor-pointer select-none hover:bg-gray-200 transition">Name<span class="sort-ind text-sm"></span></th>
+              <th data-sort="username" title="Klicken zum Sortieren" class="text-left px-4 py-2 font-semibold cursor-pointer select-none hover:bg-gray-200 transition">Username<span class="sort-ind text-sm"></span></th>
+              <th data-sort="annotation" title="Klicken zum Sortieren" class="text-left px-4 py-2 font-semibold cursor-pointer select-none hover:bg-gray-200 transition">Gruppe<span class="sort-ind text-sm"></span></th>
+              <th data-sort="role" title="Klicken zum Sortieren" class="text-center px-4 py-2 font-semibold cursor-pointer select-none hover:bg-gray-200 transition">Rolle<span class="sort-ind text-sm"></span></th>
               <th class="text-center px-4 py-2 font-semibold">Aktionen</th>
             </tr>
           </thead>
           <tbody id="member-table-body">
             {% for member in members %}
             <tr class="member-row border-t hover:bg-gray-50 transition"
-                data-search="{{ member.name }} {{ member.username }} {{ member.role_in_course }} {{ member.annotation or '' }}">
+                data-search="{{ member.name }} {{ member.username }} {{ member.role_in_course }} {{ member.annotation or '' }}"
+                data-name="{{ member.name }}"
+                data-username="{{ member.username }}"
+                data-role="{{ member.role_in_course }}">
               <td class="px-4 py-3">
                 <div class="flex items-center gap-2">
                   {% if member.avatar %}
@@ -290,6 +293,59 @@
     });
   }
 
+  // ─── Sortierung (Klick auf Spaltenüberschrift) ────────────────
+  // Analog zur Punktetabelle (overview.html): Default aufsteigend,
+  // erneuter Klick = auf-/absteigend umschalten. Die Rolle sortiert
+  // nach Hierarchie (PROF → TUTOR → STUDENT), nicht alphabetisch.
+  const ROLE_ORDER = { PROF: 0, TUTOR: 1, STUDENT: 2 };
+  let memberSortState = null;
+
+  function memberSortValue(row, key) {
+    if (key === 'name') return row.dataset.name || '';
+    if (key === 'username') return row.dataset.username || '';
+    if (key === 'annotation') return row.querySelector('.annotation-input')?.value.trim() || '';
+    if (key === 'role') return ROLE_ORDER[row.dataset.role] ?? 99;
+    return '';
+  }
+
+  // Nur vorhandene Zeilen neu anordnen (keine Neu-Render, Filter bleibt).
+  function applyMemberSort() {
+    if (!memberSortState) return;
+    const tbody = document.getElementById('member-table-body');
+    const rows = Array.from(tbody.querySelectorAll('tr.member-row'));
+    const isText = memberSortState.key !== 'role';
+    const mul = memberSortState.dir === 'asc' ? 1 : -1;
+    rows.sort((a, b) => {
+      const va = memberSortValue(a, memberSortState.key);
+      const vb = memberSortValue(b, memberSortState.key);
+      const c = isText ? String(va).localeCompare(String(vb), 'de') : va - vb;
+      return c * mul;
+    });
+    rows.forEach(r => tbody.appendChild(r));
+  }
+
+  function updateMemberSortIndicators() {
+    document.querySelectorAll('#member-table-header th[data-sort]').forEach(th => {
+      const ind = th.querySelector('.sort-ind');
+      if (ind) ind.textContent = (memberSortState && memberSortState.key === th.dataset.sort) ? (memberSortState.dir === 'asc' ? ' ▲' : ' ▼') : '';
+    });
+  }
+
+  function toggleMemberSort(key) {
+    if (memberSortState && memberSortState.key === key) {
+      memberSortState.dir = memberSortState.dir === 'asc' ? 'desc' : 'asc';
+    } else {
+      memberSortState = { key, dir: 'asc' };
+    }
+    updateMemberSortIndicators();
+    applyMemberSort();
+  }
+
+  document.getElementById('member-table-header').addEventListener('click', (e) => {
+    const th = e.target.closest('th[data-sort]');
+    if (th) toggleMemberSort(th.dataset.sort);
+  });
+
   // ─── Rolle ändern ─────────────────────────────────────────────
   async function changeRole(courseId, userId, selectEl) {
     const newRole = selectEl.value;
@@ -326,6 +382,8 @@
         const username = row.querySelector('td:nth-child(2)')?.textContent || '';
         const annotation = row.querySelector('.annotation-input')?.value || '';
         row.dataset.search = name + ' ' + username + ' ' + annotation + ' ' + newRole;
+        row.dataset.role = newRole;
+        if (memberSortState) applyMemberSort();
       }
 
       showToast(data.message || 'Rolle geändert.', 'success');
