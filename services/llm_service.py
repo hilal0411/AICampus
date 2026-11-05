@@ -975,18 +975,24 @@ class LLMService:
         last_thinking = ""
 
         image_prompt_text = (
-            "Konvertiere die Formel(n) in diesem Foto in Markdown, Mermaid und LaTeX-Code. "
-            "Gib NUR den Markdown, Mermaid bzw LaTeX-Code zurueck. "
-            "Enthält das Bild keinen Text oder Formeln, gib einen leeren String zurück."
+            "Transkribiere den Inhalt dieses Fotos: Text als Markdown, Formeln als LaTeX, "
+            "Diagramme (z. B. mit Boxen, Pfeilen oder Baeumen) als ```mermaid ... ```-Block. "
+            "Gib das Markdown direkt zurueck — die Antwort SELBST nicht in ```markdown ... ``` einbetten. "
+            "Enthält das Bild weder Text noch Formeln, gib eine leere Antwort zurueck."
         )
         # Bild-Base64 wird NICHT geloggt (Speicher + Datenschutz)
         log_prompt = f"[BILD: {mime_type}, {len(image_base64)} Zeichen Base64] {image_prompt_text}"
 
         system_prompt = (
-            "Du bist ein Experte fuer das Erkennen von Text, Graphen und mathematischen Formeln in Bildern. "
-            "Analysiere das Foto und konvertiere den Text und alle sichtbaren Graphen und Formeln in gueltigen Markdown mit Mermaid oder LaTeX-Code. "
-            "Antworte NUR mit Markdown, Mermaid und LaTeX-Code, keine Erklaerungen. "
-            "Nutze ```mermaid ... ``` für Mermaid und $ ... $ fuer inline Math und $$ ... $$ fuer display Math. "
+            "Du bist ein Experte fuer das Erkennen von Text, Diagrammen und mathematischen Formeln in Bildern. "
+            "Nutze ```mermaid ... ``` fuer Diagramme (Ablaufdiagramme, Baumdiagramme, Pfeildiagramme, "
+            "Graphen mit Knoten und Kanten), $ ... $ fuer inline Math und $$ ... $$ fuer display Math. "
+            "Uebernimm Diagramme so treu wie moeglich: Layout-Richtung (graph TD bzw. LR), "
+            "Knotenformen ([..] Rechteck, (..) abgerundet, {..} Rhombus/Entscheidung, ((..)) Kreis, {{..}} Sechseck), "
+            "Kanten (durchgezogen, gestrichelt, dick, mit/ohne Pfeilspitze, Kantenlabels) und ggf. Farben via classDef. "
+            "Knoten-IDs kurz und ohne Sonderzeichen (? oder . duerfen nur im Label stehen). "
+            "Deine Antwort ist selbst Markdown: umgib sie NIEMALS mit einem ```markdown-Zaun, "
+            "und gib keine Erklaerungen oder Kommentare dazu — nur der transkribierte Inhalt."
         )
 
         messages = [
