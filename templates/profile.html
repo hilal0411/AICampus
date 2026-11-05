@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+
+{% block title %} - Profil: {{ profile_user.name }}{% endblock %}
+
+{% block content %}
+<div class="max-w-3xl mx-auto">
+
+  <!-- Kopf: Avatar + Name -->
+  <div class="flex items-center gap-5 mb-6">
+    <div class="w-24 h-24 rounded-full bg-gray-200 flex items-center justify-center overflow-hidden shrink-0 shadow-sm">
+      {% if profile_user.avatar %}
+      <img src="{{ profile_user.avatar }}" alt="Profilbild von {{ profile_user.name }}" class="w-full h-full object-cover">
+      {% else %}
+      <span class="text-5xl">👤</span>
+      {% endif %}
+    </div>
+    <div class="min-w-0">
+      <h1 class="text-3xl font-bold text-gray-800 truncate">{{ profile_user.name }}</h1>
+      <p class="text-gray-500 mt-0.5">@{{ profile_user.username }}</p>
+      {% if is_own_profile %}
+      <a href="/settings" class="inline-block mt-2 text-sm text-blue-600 hover:text-blue-800 transition">✏️ Steckbrief bearbeiten</a>
+      {% endif %}
+    </div>
+  </div>
+
+  <!-- Steckbrief -->
+  <div class="bg-white rounded-xl shadow-md border border-gray-200 p-6">
+    {% if profile_md %}
+    <div id="profile-md" class="markdown-preview"></div>
+    {% else %}
+    <p class="text-gray-400">
+      {% if is_own_profile %}
+      Du hast noch keinen Steckbrief.
+      Lege ihn in deinen <a href="/settings" class="text-blue-600 hover:underline">Einstellungen</a> an —
+      z.&nbsp;B. mit Forschungsinteressen, angebotenen Abschlussarbeiten oder Hobbys.
+      {% else %}
+      {{ profile_user.name }} hat noch keinen Steckbrief angelegt.
+      {% endif %}
+    </p>
+    {% endif %}
+  </div>
+
+  <!-- Zurueck-Link -->
+  <a href="/" class="text-sm text-blue-600 hover:text-blue-800 transition flex items-center gap-1 mt-6">
+    <span>←</span>
+    <span>Zurück zur Startseite</span>
+  </a>
+
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+{% if profile_md %}
+<script>
+  (function () {
+    const el = document.getElementById('profile-md');
+    if (!el) return;
+    const md = {{ profile_md | tojson }};
+    renderMarkdown(md, el).catch((err) => {
+      console.error('Steckbrief-Rendering fehlgeschlagen:', err);
+      el.textContent = md;
+    });
+  })();
+</script>
+{% endif %}
+{% endblock %}

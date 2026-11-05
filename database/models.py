@@ -79,6 +79,7 @@ class UserBase(SQLModel):
     password_hash: Optional[str] = Field(default=None)   # NULL bei LDAP-Users
     ldap_dn: Optional[str] = Field(default=None)         # Distinguished Name
     avatar: Optional[str] = Field(default=None, max_length=255)  # relativer Pfad: avatars/<uuid>.<ext>
+    profile: Optional[str] = Field(default=None)  # Steckbrief (Markdown), öffentlich unter /u/<username>
 
 
 class User(UserBase, table=True):

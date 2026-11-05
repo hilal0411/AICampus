@@ -37,6 +37,10 @@ class DeleteAccountRequest(BaseModel):
     username: str = Field(min_length=1, max_length=100)
 
 
+class ProfileUpdate(BaseModel):
+    profile: str = Field(default="", max_length=50000)
+
+
 @router.patch("/")
 async def update_settings(
     data: SettingsUpdate,
@@ -105,6 +109,21 @@ async def update_settings(
         "message": " ".join(messages),
         "user": _user_dict(user, display_role),
     }
+
+
+@router.patch("/profile")
+async def update_profile(
+    data: ProfileUpdate,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Eigenen Steckbrief (Markdown) speichern — öffentlich unter /u/<username>."""
+    text = data.profile.strip()
+    user.profile = text or None
+    session.add(user)
+    session.commit()
+    session.refresh(user)
+    return {"message": "Steckbrief wurde gespeichert."}
 
 
 def _user_dict(user: User, display_role: str) -> dict:

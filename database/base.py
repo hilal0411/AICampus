@@ -129,6 +129,7 @@ def migrate_schema():
         "users": {
             "avatar": "VARCHAR",  # relatives Pfad des Profilbilds (avatars/<uuid>.<ext>)
             "deleted_at": "DATETIME",  # Soft Delete (null = aktiv)
+            "profile": "TEXT",  # Steckbrief (Markdown), öffentlich unter /u/<username>
         },
         "global_settings": {
             "llm_api_url_public": "VARCHAR",

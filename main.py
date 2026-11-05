@@ -903,6 +903,52 @@ async def about_page(request: Request, session: Session = Depends(get_session)):
     return templates.TemplateResponse("about.html", ctx)
 
 
+@app.get("/u/{username}")
+async def user_profile_page(
+    username: str,
+    request: Request,
+    session: Session = Depends(get_session),
+):
+    """Öffentlicher Steckbrief eines Users: /u/<username>.
+
+    Ohne Login erreichbar (Gäste inkl.). Gelöschte (anonymisierte) User
+    liefert der Soft-Delete-Read-Filter nicht mehr → 404.
+    """
+    user = session.exec(select(User).where(User.username == username)).first()
+    if not user:
+        raise HTTPException(404, "User nicht gefunden.")
+
+    ctx: dict[str, Any] = {
+        "request": request,
+        "page_title": f"{user.name} – Profil",
+        "page_description": (
+            "Öffentlicher Steckbrief auf AICampus: Forschungsinteressen, "
+            "Abschlussarbeiten, Hobbys."
+        ),
+        "profile_user": {
+            "username": user.username,
+            "name": user.name,
+            "avatar": f"/avatars/{user.avatar.rsplit('/', 1)[-1]}" if user.avatar else None,
+        },
+        "profile_md": user.profile or "",
+        "is_own_profile": False,
+    }
+    try:
+        viewer = await get_current_user(request, session)
+    except HTTPException:
+        viewer = None
+    if viewer:
+        display_role = "Admin" if viewer.role == GlobalUserRole.ADMIN else "User"
+        ctx.update({
+            "current_user": _user_ctx(viewer, display_role),
+            "courses": _get_user_courses(viewer, session),
+            "selected_course_id": None,
+            "is_admin": viewer.role == GlobalUserRole.ADMIN,
+            "is_own_profile": viewer.id == user.id,
+        })
+    return templates.TemplateResponse("profile.html", ctx)
+
+
 @app.get("/datenschutz")
 async def datenschutz_page(request: Request, session: Session = Depends(get_session)):
     """Öffentliche Datenschutzerklärung."""
@@ -2790,6 +2836,8 @@ async def settings_page(
             "selected_course_id": None,
             "is_admin": user.role == GlobalUserRole.ADMIN,
             "use_ldap": use_ldap,
+            "code_editor": True,  # CodeMirror (Markdown-Mode) für den Steckbrief-Editor
+            "profile_md": user.profile or "",
             "mcp_url": (
                 f"https://{PUBLIC_DOMAIN}/mcp/"
                 if PUBLIC_DOMAIN
