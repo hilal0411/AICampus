@@ -988,12 +988,19 @@
     // Caption-Kontext für TOC-Zeilen (Headings + Figuren-Captions):
     // Zitationen aufgelöst wie im Dokument, aber mit In-Page-Ankern auf den
     // Quellen-Listeneintrag am Kapitelende; keine citedRefs-Registrierung
-    // (die Kapitel-Seite registriert ihre eigenen Zitate selbst).
-    const capCtx = { refMap, citedRefs: null, hrefFor: (label) => '#ref-' + label };
-    // Link mit Math/Zitationen im Titel: Präfix (Nummer) als Text, Titel via
-    // renderCaptionRef (LaTeX $…$ → gerenderte Formel + @cite/… → Zitations-Link;
-    // Titel aus der Refmap sind Server-Plain-Text mit möglichen $…$-Paaren
-    // und Cite-Tokens).
+    // (die Kapitel-Seite registriert ihre eigenen Zitate selbst). Xrefs
+    // (@eq:…/@fig:…) als TEXT ohne Link (die Zeile ist selbst ein <a> —
+    // verschachtelte Anker sind ungültig): xrefTextHtml zeigt dieselbe
+    // Anzeige wie im Dokument (Gl. N / Abb. N / Kap. N / ❓).
+    const capCtx = {
+      refMap, citedRefs: null,
+      hrefFor: (label) => '#ref-' + label,
+      xrefFor: (kind, label) => xrefTextHtml(kind, label, refMap.labels),
+    };
+    // Link mit Math/Zitationen/Xrefs im Titel: Präfix (Nummer) als Text,
+    // Titel via renderCaptionRef (LaTeX $…$ → gerenderte Formel + @cite/… →
+    // Zitations-Link + @eq:/@fig:… → Xref-Text, s. capCtx; Titel aus der
+    // Refmap sind Server-Plain-Text mit möglichen $…$-Paaren und Tokens).
     const tocMathLink = (href, prefix, title, cls, ctx) => {
       const a = document.createElement('a');
       a.href = href;

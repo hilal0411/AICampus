@@ -3270,9 +3270,8 @@ function renderCaptionMath(text) {
 // xrefFor }; null/undefined → Math-only wie renderCaptionMath. Zitierte
 // Quellen landen in ctx.citedRefs → Quellenverzeichnis (bzw. auto-Quellen-
 // Folie in Slides, die den rohen Markdown-Alt-Text selbst scannt).
-// xrefFor(kind, label) rendert den Xref-HTML; fehlt es (z. B. TOC-Links,
-// wo ein Xref eine verschachtelte <a> wäre), bleibt der Token als
-// escaped Text stehen.
+// xrefFor(kind, label) rendert den Xref-HTML; fehlt es, bleibt der Token
+// als escaped Text stehen.
 function renderCaptionRef(text, ctx) {
   if (text == null) return '';
   text = String(text);
@@ -3298,6 +3297,30 @@ function renderCaptionRef(text, ctx) {
     last = m.index + m[0].length;
   }
   return out + renderCaptionMath(text.slice(last));
+}
+
+// Xref als TEXT (ohne Link) gegen die globale Ref-Map auflösen — für
+// TOC-zeilen, wo der Caption-Text selbst in einem <a> steht und ein Xref-
+// Link eine verschachtelte <a> wäre. Zeigt exakt denselben Text wie
+// resolveXrefHtml (Gl. N / Abb. N a) / Kap. N / Box-Typ N / ❓), nur ohne
+// Ankertag. labels = script-refmap.labels (kind-prefixiert, s. dort).
+function xrefTextHtml(kindRaw, label, labels) {
+  const kind = kindRaw === 'kap' ? 'sec' : kindRaw;
+  const g = (labels || {})[kind + ':' + label];
+  if (!g || g.kind !== kind) {
+    return `<span class="aicampus-xref-broken" title="Label unbekannt — zugehöriges Objekt fehlt">❓ ${escapeHtml(kindRaw + ':' + label)}</span>`;
+  }
+  let text;
+  if (kind === 'box') {
+    const t = g.type && CALLOUT_TYPES[g.type] ? CALLOUT_TYPES[g.type].title : 'Box';
+    text = t + ' ' + g.num;
+  } else if (g.chapter) {
+    text = 'Kap. ' + g.num;
+  } else {
+    const kt = kind === 'fig' ? 'Abb.' : kind === 'eq' ? 'Gl.' : kind === 'code' ? 'Code' : kind === 'tab' ? 'Tab.' : 'Abs.';
+    text = kt + ' ' + g.num + (kind === 'fig' && g.sub ? ' ' + g.sub + ')' : '');
+  }
+  return escapeHtml(text);
 }
 
 // Code-LaTeX-Heuristik: sieht ein $…$-Paar im Code nach Math aus?
