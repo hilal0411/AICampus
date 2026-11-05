@@ -244,6 +244,9 @@
       localOrderKey = null,
       moveGate = () => ({ ok: true }),
       onRunScript = null, onStopScript = null,
+      runDisabled = null,  // fn() -> bool: ▶-Buttons deaktiviert (z. B.
+                           // Container nicht gestartet); beim Render
+                           // und vom Template nach Status-Wechseln abgefragt
       saveStateEl = null,
       emptyMsg = "(keine Dateien)", noTaskMsg = null,
       onMainFileChange = null, onFilesLoaded = null,
@@ -825,6 +828,10 @@
       // ▶/⏹ an .sh-Dateien (Template-Callback: Terminal-Run)
       const isSh = !!(onRunScript && /\.sh$/i.test(name));
       const runActive = isSh && state.scriptRuns.has(path);
+      // Container nicht gestartet (z. B. Cold-Review) → ▶ blockiert
+      // (Analog zum Terminal-„+“; ⏹ laufender Skripte bleibt möglich).
+      const runBlocked = isSh && !runActive &&
+        !!(runDisabled && runDisabled());
       // Alle Dateien sind per Handle ziehbar; Zugriffs-Klassen/skriptfeste
       // Pfade blockt der Drop-Gate (mit Fehlermeldung, nicht ohne Handle).
       const draggable = !!(canMove || canReorder);
@@ -851,9 +858,13 @@
         (isSh
           ? '<button type="button" class="ws-runbtn shrink-0 select-none inline-flex items-center justify-center h-5 w-5 rounded text-white ' +
             (runActive ? "bg-red-600 hover:bg-red-700"
-                       : "bg-green-600 hover:bg-green-700") +
-            '" data-path="' + esc(path) + '" title="' +
-            (runActive ? "Skript stoppen" : "Skript ausführen") + '">' +
+                       : runBlocked ? "bg-gray-300 cursor-not-allowed"
+                                    : "bg-green-600 hover:bg-green-700") +
+            '" data-path="' + esc(path) + '"' +
+            (runBlocked ? " disabled" : "") + ' title="' +
+            (runActive ? "Skript stoppen"
+                       : runBlocked ? "Container läuft nicht — erst ▶ Starten"
+                                    : "Skript ausführen") + '">' +
             (runActive ? WSTOP_SVG : WPLAY_SVG) + "</button>"
           : "") +
         '<span class="truncate flex-1">' + esc(name) + "</span>" +
@@ -2409,6 +2420,24 @@
           b.classList.toggle("hover:bg-red-700", on);
           b.classList.toggle("bg-green-600", !on);
           b.classList.toggle("hover:bg-green-700", !on);
+        });
+      },
+      // ▶-Buttons blocken/entblocken (Container nicht gestartet) — ohne
+      // Baum-Rerender; laufende Skripte (⏹) bleiben betätigbar.
+      setRunDisabled: (blocked) => {
+        treeEl.querySelectorAll(".ws-runbtn").forEach(b => {
+          if (b.classList.contains("bg-red-600")) return;  // ⏹ läuft
+          if (blocked) {
+            b.disabled = true;
+            b.classList.remove("bg-green-600", "hover:bg-green-700");
+            b.classList.add("bg-gray-300", "cursor-not-allowed");
+            b.title = "Container läuft nicht — erst ▶ Starten";
+          } else if (b.disabled) {
+            b.disabled = false;
+            b.classList.remove("bg-gray-300", "cursor-not-allowed");
+            b.classList.add("bg-green-600", "hover:bg-green-700");
+            b.title = "Skript ausführen";
+          }
         });
       },
       refresh,

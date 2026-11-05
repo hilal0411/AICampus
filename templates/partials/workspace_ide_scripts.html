@@ -294,6 +294,7 @@
     onViewChanged: (view) => wsSetView(view),
     onRunScript: wsRunScript,
     onStopScript: wsStopScript,
+    runDisabled: wsRunBlocked,  // ▶ im Baum blockieren, Container läuft nicht
   });
   // Container-Status (Datei-/Editor-Status lebt in wsUI)
   const wsState = { status: null };
@@ -305,6 +306,14 @@
     return WS_REVIEW_ID != null && !WS_AUTO_START &&
       !(wsState.status && wsState.status.container &&
         wsState.status.container.state === "running");
+  }
+
+  // ▶-Buttons im Baum blockieren: Status noch unbekannt, Agent down oder
+  // Container nicht (laufend) — sonst wäre der Run ein PTY-Fehler.
+  function wsRunBlocked() {
+    const s = wsState.status;
+    if (!s || s.degraded) return true;
+    return !(s.container && s.container.state === "running");
   }
 
   // ─── View-Schalter (Editor | Medien | Terminal | Preview) ────────
@@ -370,6 +379,7 @@
       const dot = $w("ws-status-dot");
       if (dot) dot.className = "h-2.5 w-2.5 shrink-0 rounded-full bg-red-500";
       setWsToolbarEnabled(false);
+      wsUI.setRunDisabled(true);
     }
   }
 
@@ -430,6 +440,7 @@
     }
     wsRenderUsage();
     setWsToolbarEnabled(!s.degraded && !wsIsCold());
+    wsUI.setRunDisabled(wsRunBlocked());  // ▶ im Baum folgt dem Container-Status
     const toggle = $w("ws-toggle-btn");
     if (toggle && !wsToggling) {
       const running = !s.degraded && s.container && s.container.state === "running";
