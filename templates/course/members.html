@@ -44,7 +44,15 @@
                   {% else %}
                   <span class="w-7 h-7 rounded-full bg-gray-200 flex items-center justify-center text-sm shrink-0">👤</span>
                   {% endif %}
+                  {# Klick auf den Name → öffentlicher Steckbrief (neu, da die
+                     Mitglieder-Seite nicht verloren gehen soll) #}
+                  {% if member.username != 'unknown' %}
+                  <a href="/u/{{ member.username }}" target="_blank"
+                     class="hover:underline transition"
+                     title="Steckbrief von {{ member.name }} ({{ member.username }})">{{ member.name }}</a>
+                  {% else %}
                   {{ member.name }}
+                  {% endif %}
                 </div>
               </td>
               <td class="px-4 py-3 text-gray-500">{{ member.username }}</td>

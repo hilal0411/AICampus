@@ -233,10 +233,19 @@
     return s.replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   }
 
+  function forumProfileLink(m, innerHtml) {
+    // Klick auf Name/Profilbild → öffentlicher Steckbrief (neu, der
+    // Kanal-Verlauf bleibt offen).
+    return m.username && m.username !== 'unknown'
+      ? `<a href="/u/${m.username}" target="_blank" class="shrink-0 hover:opacity-80 transition" title="Steckbrief von ${escapeHtml(m.name)}">${innerHtml}</a>`
+      : innerHtml;
+  }
+
   function forumAvatarHtml(m) {
-    return m.avatar
+    const inner = m.avatar
       ? `<img src="${m.avatar}" alt="" class="w-9 h-9 rounded-full object-cover shrink-0">`
       : '<div class="w-9 h-9 rounded-full bg-gray-200 flex items-center justify-center shrink-0">👤</div>';
+    return forumProfileLink(m, inner);
   }
 
   function forumTimeLabel(iso) {
@@ -254,7 +263,7 @@
       ${forumAvatarHtml(m)}
       <div class="flex-1 min-w-0">
         <div class="flex items-center gap-2 flex-wrap">
-          <span class="text-sm font-semibold text-gray-800">${escapeHtml(m.name)}</span>
+          ${forumProfileLink(m, `<span class="text-sm font-semibold text-gray-800 hover:underline">${escapeHtml(m.name)}</span>`)}
           <span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${roleClass}">${escapeHtml(m.role)}</span>
           <span class="text-xs text-gray-400">${forumTimeLabel(m.created_at)}</span>
         </div>
