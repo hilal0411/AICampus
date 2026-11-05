@@ -1,13 +1,14 @@
 {% extends "course/base.html" %}
 
 {% block course_content %}
-  <!-- Zwei-Spalten-Layout: Mitglieder + Hinzufügen -->
-  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+  {# Layout: member_view "full" (PROF/Admin) = zwei Spalten (Liste +
+     Hinzufügen-Panel), "tutor"/"student" = nur die reduzierte Liste. #}
+  <div class="grid grid-cols-1 {% if member_view == 'full' %}lg:grid-cols-3{% endif %} gap-6">
 
     <!-- ═══════════════════════════════════════════════════════════ -->
-    <!-- Linke Spalte (2/3): Mitglieder-Liste                        -->
+    <!-- Mitglieder-Liste (Spalten je nach Rolle)                     -->
     <!-- ═══════════════════════════════════════════════════════════ -->
-    <div class="lg:col-span-2">
+    <div{% if member_view == 'full' %} class="lg:col-span-2"{% endif %}>
 
       <!-- Filter-Suche -->
       <div class="mb-4">
@@ -23,22 +24,26 @@
       <!-- Mitglieder-Tabelle -->
       <div class="card overflow-hidden">
         <div class="overflow-x-auto">
-        <table class="w-full text-sm min-w-[760px]">
+        <table class="w-full text-sm {% if member_view == 'full' %}min-w-[760px]{% elif member_view == 'tutor' %}min-w-[520px]{% endif %}">
           <thead id="member-table-header" class="bg-gray-100 text-gray-600">
             <tr>
               <th data-sort="name" title="Klicken zum Sortieren" class="text-left px-4 py-2 font-semibold cursor-pointer select-none hover:bg-gray-200 transition">Name<span class="sort-ind text-sm"></span></th>
+              {% if member_view != 'student' %}
               <th data-sort="username" title="Klicken zum Sortieren" class="text-left px-4 py-2 font-semibold cursor-pointer select-none hover:bg-gray-200 transition">Username<span class="sort-ind text-sm"></span></th>
               <th data-sort="annotation" title="Klicken zum Sortieren" class="text-left px-4 py-2 font-semibold cursor-pointer select-none hover:bg-gray-200 transition">Gruppe<span class="sort-ind text-sm"></span></th>
+              {% endif %}
+              {% if member_view == 'full' %}
               <th data-sort="role" title="Klicken zum Sortieren" class="text-center px-4 py-2 font-semibold cursor-pointer select-none hover:bg-gray-200 transition">Rolle<span class="sort-ind text-sm"></span></th>
               <th class="text-center px-4 py-2 font-semibold">Aktionen</th>
+              {% endif %}
             </tr>
           </thead>
           <tbody id="member-table-body">
             {% for member in members %}
             <tr class="member-row border-t hover:bg-gray-50 transition"
-                data-search="{{ member.name }} {{ member.username }} {{ member.role_in_course }} {{ member.annotation or '' }}"
+                data-search="{% if member_view == 'full' %}{{ member.name }} {{ member.username }} {{ member.role_in_course }} {{ member.annotation or '' }}{% elif member_view == 'tutor' %}{{ member.name }} {{ member.username }} {{ member.annotation or '' }}{% else %}{{ member.name }}{% endif %}"
                 data-name="{{ member.name }}"
-                data-username="{{ member.username }}"
+                {% if member_view != 'student' %}data-username="{{ member.username }}"{% endif %}
                 data-role="{{ member.role_in_course }}">
               <td class="px-4 py-3">
                 <div class="flex items-center gap-2">
@@ -52,14 +57,18 @@
                   {% if member.username != 'unknown' %}
                   <a href="/u/{{ member.username }}" target="_blank"
                      class="hover:underline transition"
-                     title="Steckbrief von {{ member.name }} ({{ member.username }})">{{ member.name }}</a>
+                     title="Steckbrief von {{ member.name }}{% if member_view != 'student' %} ({{ member.username }}){% endif %}">{{ member.name }}</a>
                   {% else %}
                   {{ member.name }}
                   {% endif %}
                 </div>
               </td>
+              {% if member_view != 'student' %}
               <td class="px-4 py-3 text-gray-500">{{ member.username }}</td>
+              {% endif %}
+              {% if member_view != 'student' %}
               <td class="px-4 py-3">
+                {% if member_view == 'full' %}
                 <input
                   type="text"
                   class="annotation-input w-full border rounded px-2 py-1 text-xs focus:outline-none focus:ring-2 focus:ring-blue-500 min-w-[140px]"
@@ -68,7 +77,12 @@
                   data-user-id="{{ member.user_id }}"
                   title="Gruppe (z.B. Übungsgruppe) – wird beim Tippen automatisch gespeichert"
                   oninput="onAnnotationInput(this)">
+                {% else %}
+                <span class="text-gray-600">{{ member.annotation or '' }}</span>
+                {% endif %}
               </td>
+              {% endif %}
+              {% if member_view == 'full' %}
               <td class="px-4 py-3 text-center">
                 {% if member.user_id != current_user.id %}
                 <select
@@ -105,6 +119,7 @@
                 <span class="text-gray-400 text-xs">—</span>
                 {% endif %}
               </td>
+              {% endif %}
             </tr>
             {% endfor %}
           </tbody>
@@ -124,8 +139,9 @@
     </div>
 
     <!-- ═══════════════════════════════════════════════════════════ -->
-    <!-- Rechte Spalte (1/3): Hinzufügen-Panel                       -->
+    <!-- Rechte Spalte (1/3): Hinzufügen-Panel (nur PROF/Admin)      -->
     <!-- ═══════════════════════════════════════════════════════════ -->
+    {% if member_view == 'full' %}
     <div>
       <div class="card">
         <h2 class="text-lg font-bold text-gray-800 mb-4">➕ Mitglieder hinzufügen</h2>
@@ -272,6 +288,7 @@
         </div>
       </div>
     </div>
+    {% endif %}
 
   </div>
 {% endblock %}
@@ -458,6 +475,9 @@
     }
   }
 
+  {# Hinzufügen/Einladungslinks: nur PROF/Admin (Panel + APIs sind nur
+     für sie verfügbar — loadInvites() würde sonst bei Start 403 werfen) #}
+  {% if member_view == 'full' %}
   // ─── User suchen ──────────────────────────────────────────────
   let searchTimeout = null;
   async function searchUsers() {
@@ -759,5 +779,6 @@
 
   // Einladungslinks beim Seitenstart laden
   loadInvites(courseId);
+  {% endif %}
 </script>
 {% endblock %}

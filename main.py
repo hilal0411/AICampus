@@ -680,7 +680,8 @@ def _course_tab_context(
                 "badge": forum_badge,
             }
         )
-    if is_prof or is_admin:
+    # Mitglieder: für alle Kurs-Mitglieder (read-only je Rolle) + Admins
+    if membership is not None or is_admin:
         tabs.append(
             {
                 "key": "members",
@@ -1938,7 +1939,12 @@ async def members_page(
     session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """Kurs-Tab 'Mitglieder': Für PROFs und Admins."""
+    """Kurs-Tab 'Mitglieder': für alle Kurs-Mitglieder, read-only je Rolle.
+
+    - PROF/Admin: volle Verwaltung (Rollen, Gruppen, Hinzufügen/Entfernen)
+    - TUTOR: nur Liste mit Name / Username / Gruppe
+    - STUDENT: nur Name / Username
+    """
     membership, ctx = _course_tab_context(
         session, user, request, course_id, active_tab="members"
     )
@@ -1947,8 +1953,16 @@ async def members_page(
     is_admin = user.role == GlobalUserRole.ADMIN
 
     # Admin: darf alles — auch ohne Membership
-    if not is_admin and (not membership or membership.role_in_course != CourseRole.PROF):
-        raise HTTPException(403, "Nur PROFs und Administratoren können die Mitglieder verwalten.")
+    if not is_admin and membership is None:
+        raise HTTPException(403, "Nur Kurs-Mitglieder können die Mitgliederliste sehen.")
+
+    if is_admin or membership.role_in_course == CourseRole.PROF:
+        member_view = "full"
+    elif membership.role_in_course == CourseRole.TUTOR:
+        member_view = "tutor"
+    else:
+        member_view = "student"
+    ctx["member_view"] = member_view
 
     # Alle Mitglieder mit User-Info laden
     user_courses = session.exec(
