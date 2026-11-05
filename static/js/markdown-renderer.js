@@ -136,6 +136,9 @@ if (typeof mermaid !== 'undefined') {
     startOnLoad: false,
     theme: 'default',
     securityLevel: 'loose',
+    // Fehler-SVGs nicht in den DOM rendern (Mermaid wuerde sie sonst in
+    // document.body hängen, s. renderMermaid unten).
+    suppressErrorRendering: true,
   });
 }
 
@@ -3534,8 +3537,14 @@ async function renderMermaid(diagramText) {
 
   diagramText = sanitizeFlowchartLabels(diagramText);
 
+  // Mermaid rendert in ein Zieldiv, das es selbst in document.body hängt
+  // (er braucht das Element im Dokument zur Textmessung). Bei Erfolg räumt
+  // es es selbst ab; bei Fehlern räumt es es nur mit
+  // suppressErrorRendering ab (siehe initialize) — zusätzlich hier
+  // aufzufangen (Fallback), sonst klebt der Fehler unter dem Footer.
+  const id = `mermaid-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
   try {
-    const { svg: rawSvg } = await mermaid.render(`mermaid-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`, diagramText);
+    const { svg: rawSvg } = await mermaid.render(id, diagramText);
     // securityLevel 'loose' rendert HTML in Labels ungefiltert, und die SVG-
     // Einsetzung in renderMarkdown (Schritt 11) erfolgt NACH dem zentralen
     // DOMPurify-Pass (Schritt 10) — hier daher das SVG selbst sanitisieren
@@ -3560,6 +3569,10 @@ async function renderMermaid(diagramText) {
     svgEl?.setAttribute('style', 'max-width:100%;height:auto;display:block');
     return `<div class="mermaid-diagram flex justify-center">${temp.innerHTML}</div>`;
   } catch (e) {
+    // Fallback-Räumaktion: Mermaids Zieldiv ("d" + id) sollte durch
+    // suppressErrorRendering schon weg sein, aber nicht verlassen.
+    document.getElementById(`d${id}`)?.remove();
+    document.getElementById(id)?.remove();
     return `<pre class="text-red-500 bg-red-50 p-2 rounded">Mermaid Error: ${escapeHtml(e.message)}\n\n${escapeHtml(diagramText)}</pre>`;
   }
 }
