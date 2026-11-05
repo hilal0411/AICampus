@@ -409,6 +409,7 @@ class LLMService:
         max_points: int,
         text_template: Optional[str] = None,
         custom_prompt: Optional[str] = None,
+        previous_feedback: str = "",
         config: Optional[dict] = None,
     ):
         """Korrigiert eine Textaufgabe via LLM."""
@@ -420,6 +421,7 @@ class LLMService:
             student_solution=student_solution,
             max_points=max_points,
             text_template=text_template or "(Keine Vorlage hintergelegt)",
+            previous_feedback=previous_feedback,
         )
 
         return await self._call_with_json(prompt, response_format={"type": "json_object"}, config=config)
@@ -432,6 +434,7 @@ class LLMService:
         test_results: str,
         max_points: int,
         custom_prompt: Optional[str] = None,
+        previous_feedback: str = "",
         config: Optional[dict] = None,
     ):
         """Korrigiert eine Workspace-Aufgabe via LLM
@@ -444,6 +447,7 @@ class LLMService:
             student_solution=student_files,
             test_results=test_results,
             max_points=max_points,
+            previous_feedback=previous_feedback,
         )
 
         return await self._call_with_json(prompt, response_format={"type": "json_object"}, config=config)
@@ -456,6 +460,7 @@ class LLMService:
         student_files: str,
         max_points: int,
         custom_prompt: Optional[str] = None,
+        previous_feedback: str = "",
         config: Optional[dict] = None,
     ):
         """Korrigiert eine Upload-Aufgabe via LLM
@@ -468,6 +473,7 @@ class LLMService:
             model_solution_files=model_solution_files,
             student_solution=student_files,
             max_points=max_points,
+            previous_feedback=previous_feedback,
         )
 
         return await self._call_with_json(prompt, response_format={"type": "json_object"}, config=config)
@@ -977,22 +983,24 @@ class LLMService:
         image_prompt_text = (
             "Transkribiere den Inhalt dieses Fotos: Text als Markdown, Formeln als LaTeX, "
             "Diagramme (z. B. mit Boxen, Pfeilen oder Baeumen) als ```mermaid ... ```-Block. "
-            "Gib das Markdown direkt zurueck — die Antwort SELBST nicht in ```markdown ... ``` einbetten. "
+            "Deine Antwort ist SELBST Markdown — gib sie direkt aus, ohne Codeblock-Zaun "
+            "drumherum (kein ```markdown). "
             "Enthält das Bild weder Text noch Formeln, gib eine leere Antwort zurueck."
         )
         # Bild-Base64 wird NICHT geloggt (Speicher + Datenschutz)
         log_prompt = f"[BILD: {mime_type}, {len(image_base64)} Zeichen Base64] {image_prompt_text}"
 
         system_prompt = (
+            "Deine Antwort ist SELBST Markdown: Beginne direkt mit dem Inhalt und umgebe die "
+            "Antwort niemals in einen Codeblock (kein ```markdown, kein ```text, kein anderer Zaun). "
+            "Gib keine Erklaerungen oder Kommentare dazu — nur der transkribierte Inhalt. "
             "Du bist ein Experte fuer das Erkennen von Text, Diagrammen und mathematischen Formeln in Bildern. "
             "Nutze ```mermaid ... ``` fuer Diagramme (Ablaufdiagramme, Baumdiagramme, Pfeildiagramme, "
             "Graphen mit Knoten und Kanten), $ ... $ fuer inline Math und $$ ... $$ fuer display Math. "
             "Uebernimm Diagramme so treu wie moeglich: Layout-Richtung (graph TD bzw. LR), "
             "Knotenformen ([..] Rechteck, (..) abgerundet, {..} Rhombus/Entscheidung, ((..)) Kreis, {{..}} Sechseck), "
             "Kanten (durchgezogen, gestrichelt, dick, mit/ohne Pfeilspitze, Kantenlabels) und ggf. Farben via classDef. "
-            "Knoten-IDs kurz und ohne Sonderzeichen (? oder . duerfen nur im Label stehen). "
-            "Deine Antwort ist selbst Markdown: umgib sie NIEMALS mit einem ```markdown-Zaun, "
-            "und gib keine Erklaerungen oder Kommentare dazu — nur der transkribierte Inhalt."
+            "Knoten-IDs kurz und ohne Sonderzeichen (? oder . duerfen nur im Label stehen)."
         )
 
         messages = [

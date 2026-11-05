@@ -54,6 +54,27 @@ class GradingService:
                 f"{llm_result.get('error') or 'unbekannter Fehler'}")
         return llm_result.get("data") or {}
 
+    @staticmethod
+    def _previous_feedback_text(task: Task, submission: Submission, session: Session) -> str:
+        """LLM-Feedback der früheren Versuche dieses Studenten (Kontext für
+        konsistentes Grading). Leerstring, wenn noch keines existiert."""
+        prev = session.exec(
+            select(Submission)
+            .where(Submission.task_id == task.id)
+            .where(Submission.student_id == submission.student_id)
+            .where(Submission.id != submission.id)
+            .where(Submission.attempt_number < submission.attempt_number)
+            .order_by(Submission.attempt_number.asc())  # type: ignore[attr-defined]
+        ).all()
+        lines = []
+        for sub in prev:
+            for fb in sub.feedback_list:
+                if fb.source == FeedbackSource.LLM and fb.comment.strip():
+                    lines.append(f"Versuch #{sub.attempt_number}: {fb.comment}")
+        if not lines:
+            return ""
+        return "DAS FEEDBACK AUS DEN LETZTEN SESSIONS WAR:\n" + "\n\n".join(lines)
+
     def get_llm_config(self, task: Task, session: Session) -> dict:
         """Liest LLM-Config via Resolver (course > global > .env > default)."""
         cfg = get_effective_llm_config(session, task.course_id)
@@ -110,6 +131,7 @@ class GradingService:
             max_points=task.max_points,
             text_template=task.text_template,
             custom_prompt=custom_prompt,
+            previous_feedback=self._previous_feedback_text(task, submission, session),
             config=llm_cfg,
         ))
         points = float(data.get("points", 0))
@@ -273,6 +295,7 @@ class GradingService:
             test_results=test_output,
             max_points=task.max_points,
             custom_prompt=custom_prompt,
+            previous_feedback=self._previous_feedback_text(task, submission, session),
             config=llm_cfg,
         ))
         points = float(data.get("points", 0))
@@ -324,6 +347,7 @@ class GradingService:
                            "(Keine lesbaren Dateien eingereicht)",
             max_points=task.max_points,
             custom_prompt=custom_prompt,
+            previous_feedback=self._previous_feedback_text(task, submission, session),
             config=llm_cfg,
         ))
         points = float(data.get("points", 0))
