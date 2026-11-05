@@ -32,8 +32,8 @@
               <th data-sort="username" title="Klicken zum Sortieren" class="text-left px-4 py-2 font-semibold cursor-pointer select-none hover:bg-gray-200 transition">Username<span class="sort-ind text-sm"></span></th>
               <th data-sort="annotation" title="Klicken zum Sortieren" class="text-left px-4 py-2 font-semibold cursor-pointer select-none hover:bg-gray-200 transition">Gruppe<span class="sort-ind text-sm"></span></th>
               {% endif %}
-              {% if member_view == 'full' %}
               <th data-sort="role" title="Klicken zum Sortieren" class="text-center px-4 py-2 font-semibold cursor-pointer select-none hover:bg-gray-200 transition">Rolle<span class="sort-ind text-sm"></span></th>
+              {% if member_view == 'full' %}
               <th class="text-center px-4 py-2 font-semibold">Aktionen</th>
               {% endif %}
             </tr>
@@ -41,7 +41,7 @@
           <tbody id="member-table-body">
             {% for member in members %}
             <tr class="member-row border-t hover:bg-gray-50 transition"
-                data-search="{% if member_view == 'full' %}{{ member.name }} {{ member.username }} {{ member.role_in_course }} {{ member.annotation or '' }}{% elif member_view == 'tutor' %}{{ member.name }} {{ member.username }} {{ member.annotation or '' }}{% else %}{{ member.name }}{% endif %}"
+                data-search="{% if member_view == 'full' %}{{ member.name }} {{ member.username }} {{ member.role_in_course }} {{ member.annotation or '' }}{% elif member_view == 'tutor' %}{{ member.name }} {{ member.username }} {{ member.role_in_course }} {{ member.annotation or '' }}{% else %}{{ member.name }} {{ member.role_in_course }}{% endif %}"
                 data-name="{{ member.name }}"
                 {% if member_view != 'student' %}data-username="{{ member.username }}"{% endif %}
                 data-role="{{ member.role_in_course }}">
@@ -78,13 +78,15 @@
                   title="Gruppe (z.B. Übungsgruppe) – wird beim Tippen automatisch gespeichert"
                   oninput="onAnnotationInput(this)">
                 {% else %}
-                <span class="text-gray-600">{{ member.annotation or '' }}</span>
+                {# Read-only (Tutor): Wert per data-Attribut für die Sortierung #}
+                <span class="text-gray-600 group-cell" data-annotation="{{ member.annotation or '' }}">{{ member.annotation or '' }}</span>
                 {% endif %}
               </td>
               {% endif %}
-              {% if member_view == 'full' %}
               <td class="px-4 py-3 text-center">
-                {% if member.user_id != current_user.id %}
+                {# Editierbar nur für PROF/Admin; alle anderen (inkl. eigene
+                   Zeile) sehen das read-only-Badge #}
+                {% if member_view == 'full' and member.user_id != current_user.id %}
                 <select
                   class="role-select border rounded px-2 py-1 text-xs font-semibold focus:outline-none focus:ring-2 focus:ring-blue-500
                     {% if member.role_in_course == 'PROF' %}border-red-200 bg-red-50 text-red-700
@@ -102,10 +104,11 @@
                   {% if member.role_in_course == 'PROF' %}bg-red-100 text-red-700
                   {% elif member.role_in_course == 'TUTOR' %}bg-blue-100 text-blue-700
                   {% else %}bg-green-100 text-green-700{% endif %}">
-                  {{ member.role_in_course }} (Du)
+                  {{ member.role_in_course }}{% if member.user_id == current_user.id %} (Du){% endif %}
                 </span>
                 {% endif %}
               </td>
+              {% if member_view == 'full' %}
               <td class="px-4 py-3 text-center">
                 {% if member.user_id != current_user.id %}
                 <button
@@ -320,7 +323,12 @@
   function memberSortValue(row, key) {
     if (key === 'name') return row.dataset.name || '';
     if (key === 'username') return row.dataset.username || '';
-    if (key === 'annotation') return row.querySelector('.annotation-input')?.value.trim() || '';
+    if (key === 'annotation') {
+      const input = row.querySelector('.annotation-input');
+      if (input) return input.value.trim();
+      const cell = row.querySelector('.group-cell');
+      return cell ? (cell.dataset.annotation || '').trim() : '';
+    }
     if (key === 'role') return ROLE_ORDER[row.dataset.role] ?? 99;
     return '';
   }
