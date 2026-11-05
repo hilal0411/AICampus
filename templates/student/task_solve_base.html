@@ -1050,6 +1050,10 @@
     const timerSpan = document.getElementById("grading-timer");
     const progressBar = document.getElementById("grading-progress-bar");
 
+    // Sofort sperren (vor jedem await): Doppelklick während des
+    // Draft-Flushes/Submit-POSTs würde sonst zwei Versuche erzeugen.
+    btn.disabled = true;
+
     const body = {};
     let submittedText = "";
     let uploadFile = null;
@@ -1082,6 +1086,7 @@
         Array.from(qEl.querySelectorAll("input:checked")).map((i) => parseInt(i.value, 10)));
       if (body.mc_answers.some((a) => a.length === 0)) {
         showToast("Bitte beantworte alle Fragen.", "warning");
+        btn.disabled = false;
         return;
       }
       // Historien-Label ohne Buchstaben (Student-Ansicht ist geshuffelt
@@ -1100,6 +1105,7 @@
       uploadFile = uploadFileInput && uploadFileInput.files ? uploadFileInput.files[0] : null;
       if (!uploadFile) {
         showToast("Bitte wähle zuerst eine Datei aus.", "warning");
+        btn.disabled = false;
         return;
       }
       submittedText = uploadFile.name;
@@ -1108,11 +1114,10 @@
     {% if task.task_type not in ('workspace', 'mc', 'upload', 'extern') %}
     if (!body.solution?.trim()) {
       showToast("Bitte trage zuerst eine Lösung ein.", "warning");
+      btn.disabled = false;
       return;
     }
     {% endif %}
-
-    btn.disabled = true;
 
     // Freeze solve timer on submit
     const solvedTime = getSolveTime();
