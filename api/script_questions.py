@@ -247,6 +247,8 @@ async def _llm_initial_answer(question_id: int) -> None:
                     session, q.course_id, q.student_id, q.question, "AICampus",
                     question_id=q.id,
                 )
+            # Live: offene Fragen-Dialoge laden sofort nach (6-s-Poll bleibt Fallback)
+            notifications.push_content_updated(session, q.course_id, "script_question", q.id)  # type: ignore[arg-type]
     except Exception:
         logger.exception("KI-Initialantwort fehlgeschlagen (Frage %s).", question_id)
 
@@ -323,6 +325,8 @@ async def _llm_followup_check(
                 session, q.course_id, author_id, q.question, "AICampus",  # type: ignore[arg-type]
                 question_id=q.id,
             )
+            # Live: offene Fragen-Dialoge laden sofort nach (6-s-Poll bleibt Fallback)
+            notifications.push_content_updated(session, q.course_id, "script_question", q.id)  # type: ignore[arg-type]
     except Exception:
         logger.exception("KI-Folgefrage-Prüfung fehlgeschlagen (Frage %s).", question_id)
 
@@ -606,6 +610,8 @@ async def add_script_question_response(
         session, q.course_id, q.student_id, q.question, user.name,
         question_id=q.id, responder_id=user.id,
     )
+    # Live: offene Fragen-Dialoge laden sofort nach (6-s-Poll bleibt Fallback)
+    notifications.push_content_updated(session, q.course_id, "script_question", q.id)  # type: ignore[arg-type]
 
     # KI-Folgefrage: Im Hintergrund prüfen, ob die KI von der Nachricht
     # angesprochen wird (Folgefrage auf ihre Antwort, Korrektur, …) — die

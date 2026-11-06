@@ -1541,6 +1541,13 @@
   }
 
   aicampusWatchContent(courseId, async (data) => {
+    // Neue Antwort (menschlich oder LLM): Glocke kommt per SSE sofort —
+    // der offene Fragen-Dialog holt die Antwort jetzt auch sofort ab,
+    // statt bis zum 6-s-Poll zu warten.
+    if (data.entity_type === 'script_question') {
+      if (!sqDialog.classList.contains('hidden') && !sqPolling) await sqLoad();
+      return;
+    }
     if (data.entity_type === 'reference' || data.entity_type === 'task') {
       await refreshCourseRefMap();
       await sqRerenderCitations();
@@ -1899,10 +1906,11 @@
 
   function sqOpenDialog(focusInput = false) {
     sqDialog.classList.remove('hidden');
-    if (!sqLoaded) {
-      sqLoaded = true;
-      sqLoad();
-    }
+    // Bei jedem Öffnen frisch laden: Antworten können in der Schließphase
+    // reingekommen sein (wie beim DM-Panel, sonst zeigt das zuletzt
+    // gerenderte Bild bis zum nächsten Poll).
+    sqLoaded = true;
+    sqLoad();
     sqAutoReadAnswerNotifs();
     if (focusInput) setTimeout(() => document.getElementById('sq-input').focus(), 50);
   }
