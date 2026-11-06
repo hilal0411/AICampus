@@ -74,10 +74,11 @@
   @apply border-blue-300;
 }
 
-/* Analytics-Tab (Admin): Card-Style NUR hier scoped. Global ist .card
-   bewusst ungestylt — bestehende Templates nutzen .card teils ohne
-   Padding, eine globale Box würde dort ungewollt wirken. */
-#section-analytics .card {
+/* Analytics-Tabs (Admin + Kurs-Einstellungen): Card-Style NUR hier scoped.
+   Global ist .card bewusst ungestylt — bestehende Templates nutzen .card
+   teils ohne Padding, eine globale Box würde dort ungewollt wirken. */
+#section-analytics .card,
+#settings-tab-analytics .card {
   background: #ffffff;
   border: 1px solid #e5e7eb;
   border-radius: 0.75rem;
