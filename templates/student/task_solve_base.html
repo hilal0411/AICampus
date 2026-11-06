@@ -356,9 +356,32 @@
                 <div class="feedback-box {% if fb.source == 'llm' %}feedback-llm{% else %}feedback-human{% endif %}">
                   <div class="flex items-center justify-between mb-2">
                     <div class="flex items-center gap-2">
-                      <span class="text-sm font-semibold">
-                        {% if fb.source == 'llm' %}{% if task.task_type == 'mc' %}🎯 Auto-Bewertung{% else %}🤖 LLM{% endif %}{% else %}👤 {{ fb.giver_name }}{% endif %}
-                      </span>
+                      {% if fb.source == 'llm' %}
+                      <span class="text-sm font-semibold">{% if task.task_type == 'mc' %}🎯 Auto-Bewertung{% else %}🤖 LLM{% endif %}</span>
+                      {% else %}
+                      {# Giver: Avatar/Name → Steckbrief, Sprechblase → DM-Chat
+                         (wie auf der Mitglieder-Seite) #}
+                      {% if fb.giver_username %}
+                      <a href="/u/{{ fb.giver_username }}" title="Steckbrief von {{ fb.giver_name }}" class="shrink-0">
+                        {% if fb.giver_avatar %}
+                        <img src="{{ fb.giver_avatar }}" alt="{{ fb.giver_name }}" class="w-6 h-6 rounded-full object-cover">
+                        {% else %}
+                        <span class="w-6 h-6 rounded-full bg-gray-200 flex items-center justify-center text-xs">👤</span>
+                        {% endif %}
+                      </a>
+                      <a href="/u/{{ fb.giver_username }}" class="text-sm font-semibold hover:text-blue-600 hover:underline"
+                         title="Steckbrief von {{ fb.giver_name }}">{{ fb.giver_name }}</a>
+                      {% if fb.giver_id and fb.giver_id != current_user.id %}
+                      <button type="button" onclick="dmStartChat({{ fb.giver_id }})"
+                              class="text-gray-300 hover:text-blue-600 transition"
+                              title="Nachricht an {{ fb.giver_name }} senden">
+                        <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+                      </button>
+                      {% endif %}
+                      {% else %}
+                      <span class="text-sm font-semibold">👤 {{ fb.giver_name }}</span>
+                      {% endif %}
+                      {% endif %}
                       <span class="badge {% if fb.points_earned >= task.max_points * 0.5 %}badge-pass{% else %}badge-fail{% endif %}">
                         {{ fb.points_earned }} / {{ task.max_points }} Punkte
                       </span>

@@ -2415,6 +2415,9 @@ async def task_page(
                     "points_earned": fb.points_earned,
                     "comment": fb.comment,
                     "giver_name": fb.giver.name if fb.giver else "LLM",
+                    "giver_id": fb.giver.id if fb.giver else None,
+                    "giver_username": fb.giver.username if fb.giver else None,
+                    "giver_avatar": f"/avatars/{fb.giver.avatar.rsplit('/', 1)[-1]}" if fb.giver and fb.giver.avatar else None,
                     "created_at": fb.created_at,
                 })
             my_submissions.append({
