@@ -89,7 +89,6 @@ _PAGE_RULES: list[tuple[re.Pattern, str, Optional[int]]] = [
     (re.compile(r"^/courses/(\d+)/live/mc$"), "live", 1),
     (re.compile(r"^/settings$"), "user_settings", None),
     (re.compile(r"^/notifications/archive$"), "notifications", None),
-    (re.compile(r"^/messages$"), "messages", None),
     (re.compile(r"^/u/[^/]+$"), "profile", None),
     (re.compile(r"^/admin$"), "admin", None),
 ]

@@ -952,26 +952,18 @@ async def user_profile_page(
     return templates.TemplateResponse("profile.html", ctx)
 
 
-@app.get("/messages")
-async def messages_page(
+@app.get("/messages", include_in_schema=False)
+async def messages_redirect(
     request: Request,
-    session: Session = Depends(get_session),
     user: User = Depends(get_current_user),
 ):
-    """Dünne Landing-Seite fürs DM-Panel (Deep-Link aus Notifications).
+    """Deep-Link fürs DM-Panel → Startseite mit ?chat=<id>.
 
-    Das Panel öffnet dm-panel.js automatisch bei ?chat=<id>; der Seitenaufbau
-    ist nur ein Fallback-Hinweis für den Fall, dass das Panel nicht öffnet.
+    dm-panel.js öffnet den Chat automatisch auf jeder Panel-Seite; eine
+    eigene /messages-Seite war nur Lärm.
     """
-    display_role = "Admin" if user.role == GlobalUserRole.ADMIN else "User"
-    return templates.TemplateResponse("messages.html", {
-        "request": request,
-        "page_title": "Nachrichten",
-        "current_user": _user_ctx(user, display_role),
-        "courses": _get_user_courses(user, session),
-        "selected_course_id": None,
-        "is_admin": user.role == GlobalUserRole.ADMIN,
-    })
+    url = "/" + (f"?{request.url.query}" if request.url.query else "")
+    return RedirectResponse(url=url, status_code=302)
 
 
 @app.get("/datenschutz")

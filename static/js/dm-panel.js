@@ -98,7 +98,9 @@
         const d = await res.json();
         if (d.detail) msg = typeof d.detail === "string" ? d.detail : "Fehler (" + res.status + ")";
       } catch { /* nicht-JSON */ }
-      throw new Error(msg);
+      const err = new Error(msg);
+      err.status = res.status;
+      throw err;
     }
     return res.json();
   }
@@ -155,7 +157,13 @@
     if (state.restoreChatId != null) {
       const rid = state.restoreChatId;
       state.restoreChatId = null;
-      if (chats.some((c) => c.id === rid)) selectChat(rid);
+      if (chats.some((c) => c.id === rid)) {
+        selectChat(rid);
+      } else {
+        // Kein Zugriff / Chat weg: Lade-Text wieder auf die Standard-
+        // Leeransicht zurücksetzen.
+        $("dm-chat-empty").textContent = CHAT_EMPTY_TEXT;
+      }
     }
     updateBadge();
     if (state.open) {
@@ -331,6 +339,17 @@
       appendMessages(msgs, true);
       markChatRead();
     } catch (e) {
+      if (state.activeChatId !== chatId) return; // in der Zeit auf anderen Chat gewechselt
+      if (e.status === 403 || e.status === 404) {
+        // Kein Zugriff / Chat nicht mehr vorhanden (z. B. alter Deep-Link):
+        // schlicht die normale Leeransicht, kein Lade-Text für immer.
+        state.activeChatId = null;
+        state.readUpTo = 0;
+        panel.classList.remove("mobile-viewing");
+        savePinState();
+        showChatEmpty();
+        return;
+      }
       emptyEl.textContent = "Nachrichten konnten nicht geladen werden.";
       showToast(e.message, "error");
     }
@@ -860,33 +879,35 @@
     // aktualisiert zusätzlich sofort; Polling ist der Fallback.
     setInterval(() => { if (!document.hidden) loadChats().catch(() => {}); }, 15000);
 
+    // Deep-Link (z. B. aus einer Benachrichtigung): ?chat=<id>.
+    // Er hat Priorität vor dem gespeicherten Zustand — ein expliziter
+    // Klick auf einen bestimmten Chat zählt mehr als der Restore.
+    const urlChat = Number(new URLSearchParams(window.location.search).get("chat")) || null;
+
     // Angeheftetes Fenster über Seitenwechsel (Voll-Reload) hinweg halten:
     // Zustand (Pin, Größe, Chat, Sichtbarkeit) aus localStorage. Der
-    // gespeicherte Chat wird von loadChats() geöffnet, sobald die Liste
+    // zu öffnende Chat wird von loadChats() geöffnet, sobald die Liste
     // da ist (restoreChatId) → ein Fetch statt zwei, kein Listen-Glitch.
     const saved = loadPinState();
     if (saved && saved.pinned && window.matchMedia("(min-width: 640px)").matches) {
       state.pinned = true;
       if (saved.w && saved.h) state.pinSize = { w: saved.w, h: saved.h };
       applyPinStyle();
-      const chatId = Number(saved.chatId) || null;
+      const chatId = urlChat || (Number(saved.chatId) || null);
       if (chatId) {
         state.restoreChatId = chatId;
         // Lücke bis die Chat-Liste da ist: sofort Lade-Text statt
         // „Kein Chat ausgewählt".
         $("dm-chat-empty").textContent = "Nachrichten werden geladen …";
       }
-      // So weiter, wie der User es verlassen hat: ausgeblendetes Fenster
-      // bleibt ausgeblendet (Bubble-Button blendet es ein).
-      if (saved.open !== false) setPanelOpen(true);
+      // So weiter, wie der User es verlassen hat — außer der Deep-Link
+      // verlangt explizit einen Chat (dann immer sichtbar machen).
+      if (urlChat || saved.open !== false) setPanelOpen(true);
       else loadChats().catch(() => {});
-      return; // Deep-Link überschreibt einen angehefteten Zustand nicht
+      return;
     }
 
     loadChats().catch(() => {});
-
-    // Deep-Link (z. B. aus einer Benachrichtigung): /messages?chat=<id>
-    const chatId = new URLSearchParams(window.location.search).get("chat");
-    if (chatId) dmOpenPanel(chatId);
+    if (urlChat) dmOpenPanel(urlChat);
   })();
 })();
