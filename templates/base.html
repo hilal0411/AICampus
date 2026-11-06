@@ -675,10 +675,13 @@
           <span class="flex items-center gap-1 shrink-0">
             {# Stecknadel (nur Desktop): heftet das Panel unten rechts an,
                es bleibt beim Seitenwechsel offen (Zustand in localStorage). #}
+            {# Farbzustand (blau = Pin, rot = Pin-off) setzt dm-panel.js #}
             <button type="button" id="dm-pin-btn" onclick="dmTogglePin()"
-                    class="hidden sm:block p-1.5 rounded-lg text-gray-400 hover:text-blue-600 hover:bg-blue-50 transition"
+                    class="hidden sm:block p-1.5 rounded-lg transition"
                     title="Anheften: Fenster bleibt unten rechts auch beim Seitenwechsel offen">
-              <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
+              {# Pin / Pin-off (durchgestrichen) wird per Class getauscht (dm-panel.js) #}
+              <svg class="w-4 h-4 dm-pin-ico" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>
+              <svg class="w-4 h-4 dm-unpin-ico hidden" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/><path d="M4 4l16 16"/></svg>
             </button>
             <button type="button" onclick="dmOpenNewChat('create')"
                     class="text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 rounded-lg px-2.5 py-1.5 transition"

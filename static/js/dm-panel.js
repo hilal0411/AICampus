@@ -56,9 +56,19 @@
     panel.style.width = state.pinned ? state.pinSize.w + "px" : "";
     panel.style.height = state.pinned ? state.pinSize.h + "px" : "";
     updateNarrow();
+    // Pin (nicht angeheftet) bläulich, Pin-off (angeheftet) schlicht grau.
     const btn = $("dm-pin-btn");
-    if (btn) btn.classList.toggle("text-blue-600", state.pinned);
-    if (btn) btn.classList.toggle("bg-blue-50", state.pinned);
+    if (btn) btn.classList.toggle("bg-blue-50", !state.pinned);
+    if (btn) btn.classList.toggle("text-blue-600", !state.pinned);
+    if (btn) btn.classList.toggle("text-gray-400", state.pinned);
+    // Icon: Pin ↔ Pin-off (durchgestrichen)
+    const pinIco = btn && btn.querySelector(".dm-pin-ico");
+    const unpinIco = btn && btn.querySelector(".dm-unpin-ico");
+    if (pinIco) pinIco.classList.toggle("hidden", state.pinned);
+    if (unpinIco) unpinIco.classList.toggle("hidden", !state.pinned);
+    if (btn) btn.title = state.pinned
+      ? "Lösen: Fenster wird wieder zum zentrierten Pop-up"
+      : "Anheften: Fenster bleibt unten rechts auch beim Seitenwechsel offen";
   }
   // Angeheftet + schmal: Master-Detail (Liste ODER Verlauf), sonst wäre
   // der Verlauf unter ~560px unbrauchbar schmal (analog Forum/Mobilmodus).
@@ -673,6 +683,10 @@
   // ─── Init ───────────────────────────────────────────────────────
 
   (function init() {
+    // Farbzustand des Pin-Buttons sofort setzen (blau = Pin), auch wenn
+    // noch nie getoggelt wurde.
+    applyPinStyle();
+
     const composer = $("dm-composer");
     if (composer) composer.addEventListener("submit", (e) => { e.preventDefault(); dmSend(); });
 
@@ -686,7 +700,12 @@
       });
       input.addEventListener("input", () => {
         input.style.height = "";
-        input.style.height = Math.min(input.scrollHeight, 120) + "px";
+        // scrollHeight enthält das Padding, bei border-box aber nicht den
+        // Border — ohne Aufrechnung schrumpft das Feld beim ersten Tippen
+        // und zeigt eine Mini-Scrollbar (wie im Forum).
+        const cs = getComputedStyle(input);
+        const border = parseFloat(cs.borderTopWidth) + parseFloat(cs.borderBottomWidth);
+        input.style.height = Math.min(input.scrollHeight + border, 120) + "px";
       });
     }
 
