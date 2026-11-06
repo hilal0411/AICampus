@@ -399,6 +399,59 @@ def mcp_usage(days: int) -> dict[str, Any]:
     }
 
 
+def dm_usage(days: int) -> dict[str, Any]:
+    """DM-Nutzung im Fenster: KPIs, tägliche Serie, Chat-Größen-Histogramm.
+
+    Die Größen-Verteilung ist ein aktueller Snapshot aller existierenden
+    Chats (strukturell, nicht fenstergebunden) — gelöschte Chats (unter 2
+    Mitglieder) fallen von selbst heraus.
+    """
+    since = _since(days)
+    with Session(engine) as session:
+        row = session.execute(
+            text(
+                "SELECT COUNT(*), COUNT(DISTINCT user_id), COUNT(DISTINCT chat_id) "
+                "FROM dm_messages WHERE created_at >= :since"
+            ),
+            {"since": since},
+        ).first()
+        total_msgs = session.execute(text("SELECT COUNT(*) FROM dm_messages")).first()
+        total_chats = session.execute(text("SELECT COUNT(*) FROM dm_chats")).first()
+        daily = session.execute(
+            text(
+                "SELECT date(created_at) AS d, COUNT(*) AS n "
+                "FROM dm_messages WHERE created_at >= :since GROUP BY d"
+            ),
+            {"since": since},
+        ).all()
+        sizes = session.execute(
+            text(
+                "SELECT size, COUNT(*) AS chats FROM ("
+                "  SELECT chat_id, COUNT(*) AS size FROM dm_chat_members GROUP BY chat_id"
+                ") GROUP BY size ORDER BY size"
+            )
+        ).all()
+
+    # Tägliche Serie mit 0er auffüllen (wie daily_active_users)
+    counts = {str(r[0]): r[1] for r in daily}
+    out_daily = []
+    today = datetime.now().date()
+    for i in range(days - 1, -1, -1):
+        d = today - timedelta(days=i)
+        out_daily.append({"date": d.isoformat(), "count": counts.get(d.isoformat(), 0)})
+
+    return {
+        "days": days,
+        "messages": row[0] if row else 0,
+        "senders": row[1] if row else 0,
+        "active_chats": row[2] if row else 0,
+        "total_messages": total_msgs[0] if total_msgs else 0,
+        "total_chats": total_chats[0] if total_chats else 0,
+        "daily": out_daily,
+        "sizes": [{"size": r[0], "chats": r[1]} for r in sizes],
+    }
+
+
 def mcp_recent(limit: int = 100) -> list[dict[str, Any]]:
     """Neueste MCP-Tool-Calls (Wer-Wann-Was), inkl. User-/Kursname."""
     sql = (

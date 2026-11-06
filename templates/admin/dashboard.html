@@ -206,6 +206,42 @@
           </div>
         </div>
 
+        <!-- DM-Nutzung -->
+        <div class="card p-4 mb-4">
+          <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
+            <h3 class="font-semibold text-gray-800">Nachrichten (DM)</h3>
+            <span class="text-xs text-gray-400">1:1- und Gruppenchats</span>
+          </div>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-3">
+            <div class="bg-gray-50 rounded-lg p-3 text-center">
+              <div id="dm-kpi-messages" class="text-xl font-bold text-gray-900">–</div>
+              <div class="text-xs text-gray-500 mt-1">Nachrichten (Fenster)</div>
+            </div>
+            <div class="bg-gray-50 rounded-lg p-3 text-center">
+              <div id="dm-kpi-senders" class="text-xl font-bold text-gray-900">–</div>
+              <div class="text-xs text-gray-500 mt-1">Aktive Sender</div>
+            </div>
+            <div class="bg-gray-50 rounded-lg p-3 text-center">
+              <div id="dm-kpi-chats" class="text-xl font-bold text-gray-900">–</div>
+              <div class="text-xs text-gray-500 mt-1">Aktive Chats</div>
+            </div>
+            <div class="bg-gray-50 rounded-lg p-3 text-center">
+              <div id="dm-kpi-total-chats" class="text-xl font-bold text-gray-900">–</div>
+              <div class="text-xs text-gray-500 mt-1">Chats gesamt</div>
+            </div>
+          </div>
+          <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <div>
+              <h4 class="text-sm font-medium text-gray-600 mb-2">DMs pro Tag</h4>
+              <div class="h-56 relative"><canvas id="dm-daily-chart"></canvas></div>
+            </div>
+            <div>
+              <h4 class="text-sm font-medium text-gray-600 mb-2">Chat-Größen (aktuell)</h4>
+              <div class="h-56 relative"><canvas id="dm-sizes-chart"></canvas></div>
+            </div>
+          </div>
+        </div>
+
         <!-- Top-Seiten -->
         <div class="card p-4 mb-4">
           <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
@@ -2010,6 +2046,8 @@
     admin: 'Admin-Konsole',
   };
   let analyticsDauChart = null;
+  let analyticsDmDailyChart = null;
+  let analyticsDmSizesChart = null;
   let analyticsSelectedUser = null;
 
   function analyticsPageLabel(key) {
@@ -2019,13 +2057,14 @@
   async function loadAnalytics() {
     const days = document.getElementById('analytics-days').value || '30';
     const courseId = document.getElementById('analytics-course').value;
-    const [ov, pages, courses, users, mcp, mcpRecent] = await Promise.all([
+    const [ov, pages, courses, users, mcp, mcpRecent, dm] = await Promise.all([
       fetch(`/api/admin/analytics/overview?days=${days}`, { credentials: 'same-origin' }).then(r => r.json()),
       fetch(`/api/admin/analytics/top-pages?days=${days}${courseId ? `&course_id=${courseId}` : ''}`, { credentials: 'same-origin' }).then(r => r.json()),
       fetch(`/api/admin/analytics/top-courses?days=${days}`, { credentials: 'same-origin' }).then(r => r.json()),
       fetch(`/api/admin/analytics/top-users?days=${days}`, { credentials: 'same-origin' }).then(r => r.json()),
       fetch(`/api/admin/analytics/mcp?days=${days}`, { credentials: 'same-origin' }).then(r => r.json()),
       fetch('/api/admin/analytics/mcp/recent?limit=50', { credentials: 'same-origin' }).then(r => r.json()),
+      fetch(`/api/admin/analytics/dm?days=${days}`, { credentials: 'same-origin' }).then(r => r.json()),
     ]);
 
     // KPIs
@@ -2107,6 +2146,67 @@
         <td class="py-2 px-3 text-sm text-center">${r.users}</td>
       </tr>`, ['Client', 'Aufrufe', 'User']);
     document.getElementById('mcp-recent-table').innerHTML = renderMcpRecentRows(mcpRecent);
+
+    // DM-Nutzung
+    document.getElementById('dm-kpi-messages').textContent = dm.messages ?? 0;
+    document.getElementById('dm-kpi-senders').textContent = dm.senders ?? 0;
+    document.getElementById('dm-kpi-chats').textContent = dm.active_chats ?? 0;
+    document.getElementById('dm-kpi-total-chats').textContent = dm.total_chats ?? 0;
+    const dmDailyCanvas = document.getElementById('dm-daily-chart');
+    if (analyticsDmDailyChart) analyticsDmDailyChart.destroy();
+    analyticsDmDailyChart = new Chart(dmDailyCanvas, {
+      type: 'bar',
+      data: {
+        labels: (dm.daily || []).map(d => d.date.slice(5).replace('-', '.')),
+        datasets: [{
+          label: 'DMs',
+          data: (dm.daily || []).map(d => d.count),
+          backgroundColor: 'rgba(59, 130, 246, 0.55)',
+          hoverBackgroundColor: 'rgba(59, 130, 246, 0.8)',
+          borderRadius: 2,
+        }],
+      },
+      options: {
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { beginAtZero: true, ticks: { stepSize: 1 } },
+          x: { grid: { display: false } },
+        },
+      },
+    });
+    const dmSizesCanvas = document.getElementById('dm-sizes-chart');
+    if (analyticsDmSizesChart) analyticsDmSizesChart.destroy();
+    analyticsDmSizesChart = new Chart(dmSizesCanvas, {
+      type: 'bar',
+      data: {
+        labels: (dm.sizes || []).map(s => s.size + (s.size === 2 ? ' (1:1)' : ' (Gruppe)')),
+        datasets: [{
+          label: 'Chats',
+          data: (dm.sizes || []).map(s => s.chats),
+          backgroundColor: 'rgba(16, 185, 129, 0.55)',
+          hoverBackgroundColor: 'rgba(16, 185, 129, 0.8)',
+          borderRadius: 2,
+        }],
+      },
+      options: {
+        maintainAspectRatio: false,
+        indexAxis: 'y',
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: { label: (ctx) => {
+              const total = (dm.sizes || []).reduce((s, x) => s + x.chats, 0) || 1;
+              return ` ${ctx.parsed.x} Chats (${Math.round(ctx.parsed.x / total * 100)}%)`;
+            } },
+          },
+        },
+        scales: {
+          x: { beginAtZero: true, ticks: { stepSize: 1 }, title: { display: true, text: 'Anzahl Chats' } },
+          y: { grid: { display: false }, title: { display: true, text: 'Größe (Mitglieder)' } },
+        },
+      },
+    });
 
     await loadAnalyticsRecent();
   }
