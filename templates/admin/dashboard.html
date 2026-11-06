@@ -2221,20 +2221,30 @@
       },
     });
 
+    const attemptCap = fb.attempt_cap ?? 10;
     const attemptLabel = (a) => a.offset === 0 ? 'Letzter'
       : a.offset === 1 ? 'Vorletzter'
-      : a.offset >= (fb.attempt_cap ?? 10) ? 'frühere'
+      : a.offset >= attemptCap ? 'frühere'
       : (a.offset + 1) + '.';
+    // Ränge ohne bewertete Abgaben im Fenster mit null auffüllen (lückenlose Skala)
+    const attemptBuckets = {};
+    (fb.attempts || []).forEach(a => { attemptBuckets[a.offset] = a; });
+    const regularOffsets = Object.keys(attemptBuckets).map(Number).filter(o => o < attemptCap);
+    const attemptSeries = [];
+    for (let o = 0; o <= (regularOffsets.length ? Math.max(...regularOffsets) : 0); o++) {
+      attemptSeries.push(attemptBuckets[o] || { offset: o, avg: null, std: null, n: 0 });
+    }
+    if (attemptBuckets[attemptCap]) attemptSeries.push(attemptBuckets[attemptCap]);
     const fbAttemptsCanvas = document.getElementById('fb-attempts-chart');
     if (analyticsFbAttemptsChart) analyticsFbAttemptsChart.destroy();
     analyticsFbAttemptsChart = new Chart(fbAttemptsCanvas, {
       type: 'line',
       data: {
-        labels: (fb.attempts || []).map(attemptLabel),
+        labels: attemptSeries.map(attemptLabel),
         datasets: [{
           label: 'Ø-Leistung (%)',
-          data: (fb.attempts || []).map(a => a.avg),
-          errorBars: (fb.attempts || []).map(a => a.std),
+          data: attemptSeries.map(a => a.avg),
+          errorBars: attemptSeries.map(a => a.std),
           borderColor: '#3b82f6',
           backgroundColor: 'rgba(59, 130, 246, 0.7)',
           pointBackgroundColor: '#3b82f6',
@@ -2252,7 +2262,7 @@
           tooltip: {
             callbacks: {
               label: (ctx) => {
-                const a = (fb.attempts || [])[ctx.dataIndex] || {};
+                const a = attemptSeries[ctx.dataIndex] || {};
                 return ` Ø ${ctx.parsed.y.toFixed(1)} % (±${(a.std ?? 0).toFixed(1)}, n=${a.n ?? 0})`;
               },
             },
