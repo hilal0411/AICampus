@@ -108,6 +108,32 @@ def push_dm_message(session: Session, chat_id: int, message_id: int) -> None:
         logger.exception("[Notifications] DM-Live-Event (Chat %s) fehlgeschlagen.", chat_id)
 
 
+def push_dm_webpush(session: Session, chat_id: int, chat_title: str,
+                    sender: User, content: str) -> None:
+    """Browser-Web-Push für eine neue DM — bewusst OHNE Glocke-Eintrag.
+
+    DMs werden in der Sprechblase angezeigt (Badge + Verlauf); ein
+    Glocken-Zeiler wäre doppelt. Der Push weckt trotzdem andere
+    Tabs/Browser. Kein "id" im Payload → der Service Worker markiert bei
+    Klick nichts als gelesen (keine Zeile); der Link öffnet den Chat,
+    dessen Ungelesen-Status das DM-Panel selbst aufräumt.
+    """
+    try:
+        members = [uid for uid in chat_member_ids(session, chat_id) if uid != sender.id]
+        if not members:
+            return
+        payload = {
+            "title": f"{sender.name} · {chat_title}",
+            "body": f"„{_truncate(content)}“",
+            "url": f"/messages?chat={chat_id}",
+            "tag": f"dm-{chat_id}",  # aufeinanderfolgende DMs ersetzen sich
+        }
+        for uid in members:
+            _send_webpush_payload(uid, payload)
+    except Exception:
+        logger.exception("[Notifications] DM-Web-Push (Chat %s) fehlgeschlagen.", chat_id)
+
+
 def push_content_updated(session: Session, course_id: int, entity_type: str, entity_id: int,
                          origin_type: str | None = None,
                          origin_media: str | None = None) -> None:
@@ -358,27 +384,31 @@ def _send_webpush_sync(user_id: int, payload: dict[str, Any]) -> None:
         logger.exception("[Push] Versand (User %s) fehlgeschlagen.", user_id)
 
 
-def _schedule_webpush(user_id: int, n: Notification) -> None:
-    """Browser-Push für eine neue Benachrichtigung anlegen (nie blockierend).
+def _send_webpush_payload(user_id: int, payload: dict[str, Any]) -> None:
+    """Browser-Push mit fertigem Payload anlegen (nie blockierend).
 
     Im Event-Loop → Thread-Pool; ohne Loop (z. B. aus einem
     Hintergrund-Thread des Grading-Flows) → eigener Daemon-Thread.
     """
     if not push_enabled():
         return
-    payload = {
-        "title": n.title,
-        "body": n.body,
-        "url": n.link,
-        "id": n.id,
-        "tag": str(n.id),
-    }
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
         threading.Thread(target=_send_webpush_sync, args=(user_id, payload), daemon=True).start()
         return
     loop.run_in_executor(None, _send_webpush_sync, user_id, payload)
+
+
+def _schedule_webpush(user_id: int, n: Notification) -> None:
+    """Browser-Push für eine neue Benachrichtigungs-Zeile."""
+    _send_webpush_payload(user_id, {
+        "title": n.title,
+        "body": n.body,
+        "url": n.link,
+        "id": n.id,
+        "tag": str(n.id),
+    })
 
 
 def notify_llm_feedback(

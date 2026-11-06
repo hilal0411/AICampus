@@ -583,6 +583,12 @@ async def create_dm_message(
     # war nur Lärm (entschieden 2026-11-06).
     notifications.push_dm_message(session, chat.id, msg.id)  # type: ignore[arg-type]
 
+    # Browser-Web-Push (ohne Glocke): weckt andere Tabs/Browser des
+    # Gegenübers; Link öffnet genau diesen Chat.
+    members = notifications.chat_member_ids(session, chat.id)
+    users = _users_by_id(session, set(members))
+    notifications.push_dm_webpush(session, chat.id, chat_title(session, chat, viewer, members, users), viewer, content)
+
     return _message_dict(msg, viewer, viewer)
 
 
