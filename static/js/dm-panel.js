@@ -46,6 +46,9 @@
     try {
       localStorage.setItem(PIN_KEY, JSON.stringify({
         pinned: state.pinned,
+        // Sichtbarkeit: angeheftetes Fenster soll beim Seitenwechsel so
+        // bleiben, wie der User es gerade sieht (offen oder ausgeblendet).
+        open: state.open,
         w: state.pinSize.w,
         h: state.pinSize.h,
         chatId: state.activeChatId,
@@ -103,6 +106,7 @@
   function setPanelOpen(open) {
     if (open === state.open) return;
     state.open = open;
+    savePinState();
     panel.classList.toggle("hidden", !open);
     const btn = $("dm-btn");
     if (btn) btn.setAttribute("aria-expanded", open ? "true" : "false");
@@ -846,14 +850,15 @@
       state.pinned = true;
       if (saved.w && saved.h) state.pinSize = { w: saved.w, h: saved.h };
       applyPinStyle();
-      setPanelOpen(true);
+      // So weiter, wie der User es verlassen hat: ausgeblendetes Fenster
+      // bleibt ausgeblendet (Bubble-Button blendet es ein).
+      if (saved.open !== false) setPanelOpen(true);
       const chatId = Number(saved.chatId) || null;
       if (chatId) {
         // Erst prüfen, dass der Chat noch existiert (leere 1:1-Chats
         // verschwinden aus der Liste) → sonst stummer 404-Toast.
         api("/api/dm/chats").then((chats) => {
-          if (state.open && state.activeChatId == null &&
-              chats.some((c) => c.id === chatId)) {
+          if (state.activeChatId == null && chats.some((c) => c.id === chatId)) {
             selectChat(chatId);
           }
         }).catch(() => {});
