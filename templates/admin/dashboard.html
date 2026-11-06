@@ -2235,6 +2235,8 @@
       attemptSeries.push(attemptBuckets[o] || { offset: o, avg: null, std: null, n: 0 });
     }
     if (attemptBuckets[attemptCap]) attemptSeries.push(attemptBuckets[attemptCap]);
+    // Spiegeln: älteste Versuche links, letzter Versuch rechts
+    attemptSeries.reverse();
     const fbAttemptsCanvas = document.getElementById('fb-attempts-chart');
     if (analyticsFbAttemptsChart) analyticsFbAttemptsChart.destroy();
     analyticsFbAttemptsChart = new Chart(fbAttemptsCanvas, {
