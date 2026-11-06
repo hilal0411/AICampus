@@ -27,6 +27,7 @@
     pollingMsgs: false,
     dialogMode: null, // "create" | "manage" | "view"
     selectedUserIds: [],
+    selectedUsers: {}, // id → User-Dict (für die „Ausgewählt"-Sektion)
     searchTimer: null,
     pinned: false, // Desktop: Panel unten rechts angeheftet (bleibt beim
     // Seitenwechsel offen — Zustand in localStorage)
@@ -449,6 +450,9 @@
     if (!state.open) setPanelOpen(true);
     state.dialogMode = mode;
     state.selectedUserIds = [];
+    state.selectedUsers = {};
+    $("dm-selected-users").innerHTML = "";
+    $("dm-selected-users").classList.add("hidden");
     $("dm-new-chat").classList.remove("hidden");
     $("dm-new-chat-title").textContent =
       mode === "create" ? "Neuer Chat" : mode === "manage" ? "Mitglieder verwalten" : "Mitglieder";
@@ -504,15 +508,18 @@
   window.dmRemoveMember = async (userId) => {
     if (state.activeChatId == null) return;
     try {
-      const res = await api(`/api/dm/chats/${state.activeChatId}/members/${userId}`, { method: "DELETE" });
-      if (res.deleted) {
-        dmCloseNewChat();
-        await loadChats();
-      } else {
-        renderMemberList();
-        const chat = state.chats.find((c) => c.id === state.activeChatId);
-        if (chat) renderChatHeader(chat);
+      // res.deleted = der CHAT wurde gelöscht (weniger als 2 Mitglieder),
+      // nicht "Mitglied entfernt" — immer frische Daten vom Server holen,
+      // sonst rendert die Liste aus dem alten state.chats weiter.
+      await api(`/api/dm/chats/${state.activeChatId}/members/${userId}`, { method: "DELETE" });
+      await loadChats();
+      const chat = state.chats.find((c) => c.id === state.activeChatId);
+      if (!chat) {
+        dmCloseNewChat(); // Chat ist weg (gelöscht oder verlassen)
+        return;
       }
+      renderMemberList();
+      renderChatHeader(chat);
     } catch (e) {
       showToast(e.message, "error");
     }
@@ -588,6 +595,8 @@
     }
     try {
       const data = await api(`/api/users/search?q=${encodeURIComponent(q)}`);
+      // Cache für die „Ausgewählt"-Sektion (Name/Avatar über die Suche hinweg)
+      for (const u of data.users) state.selectedUsers[u.id] = u;
       results.innerHTML = data.users.length
         ? data.users
             .map((u) => {
@@ -621,9 +630,49 @@
     const cb = row.querySelector("input[type=checkbox]");
     if (cb) cb.checked = next;
     if (next && i === -1) state.selectedUserIds.push(userId);
+    // Cache-Nachtrag: NICHT löschen — der Cache dient nur als Name/Avatar-
+    // Lookup über die Suche hinweg; wäre er nach dem Deaktivieren weg,
+    // zeigte ein erneutes Aktivieren "User #id".
     if (!next && i !== -1) state.selectedUserIds.splice(i, 1);
     row.classList.toggle("bg-blue-50", next);
+    renderSelectedUsers();
     updateCreateButton();
+  };
+
+  // „Ausgewählt"-Sektion (nur Create-Modus): die gewählten Personen bleiben
+  // sichtbar, auch wenn neue Suchergebnisse die Ergebnisliste ersetzen —
+  // sonst sieht man nicht mehr, wer schon in der Gruppe ist.
+  function renderSelectedUsers() {
+    const box = $("dm-selected-users");
+    if (!box) return;
+    const show = state.dialogMode === "create" && state.selectedUserIds.length > 0;
+    box.classList.toggle("hidden", !show);
+    if (!show) { box.innerHTML = ""; return; }
+    box.innerHTML =
+      `<p class="px-2 pb-0.5 text-[11px] font-semibold uppercase tracking-wide text-blue-700">Ausgewählt (${state.selectedUserIds.length})</p>` +
+      state.selectedUserIds
+        .map((id) => {
+          const u = state.selectedUsers[id];
+          const name = u ? escHtml(u.name) : "User #" + id;
+          const username = u ? escHtml(u.username) : "";
+          return `
+            <div class="flex items-center gap-2.5 px-2 py-1.5 rounded-lg bg-white">
+              ${dmAvatarHtml(u, "w-8 h-8 rounded-full shrink-0")}
+              <span class="flex-1 min-w-0 text-sm truncate">${name}${username ? ` <span class="text-gray-400">@${username}</span>` : ""}</span>
+              <button type="button" onclick="dmRemoveSelected(${id})" class="text-gray-300 hover:text-red-500 transition" title="Auswahl entfernen">✕</button>
+            </div>`;
+        })
+        .join("");
+  }
+
+  // ✕ in der „Ausgewählt"-Sektion: Person entfernen (auch aus der Ergebnisliste).
+  window.dmRemoveSelected = (userId) => {
+    const i = state.selectedUserIds.indexOf(userId);
+    if (i === -1) return;
+    state.selectedUserIds.splice(i, 1);
+    renderSelectedUsers();
+    updateCreateButton();
+    dmSearchUsers(); // Ergebnisliste: Häkchen wieder raus
   };
 
   window.updateCreateButton = function updateCreateButton() {

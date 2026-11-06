@@ -753,6 +753,10 @@
           <input id="dm-search-input" type="text" placeholder="Person suchen (Name oder @username) …"
                  class="w-full rounded-lg border border-gray-300 px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500">
         </div>
+        {# Auswahl (Create-Modus): bleibt sichtbar, auch wenn neue Suchergebnisse
+           die Ergebnisliste ersetzen — sonst verliert man den Überblick, wer
+           schon in der Gruppe ist. #}
+        <div id="dm-selected-users" class="hidden dm-scroll overflow-y-auto max-h-40 border-b border-gray-100 bg-blue-50/60 px-2 pt-1.5 pb-2"></div>
         <div id="dm-search-results" class="dm-scroll overflow-y-auto p-2 space-y-0.5 min-h-[60px] max-h-56"></div>
         <div id="dm-member-list" class="dm-scroll overflow-y-auto p-2 max-h-56 border-t border-gray-100"></div>
         <div id="dm-group-name-row" class="hidden px-4 py-2 border-t border-gray-200">
