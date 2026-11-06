@@ -9,11 +9,11 @@
 
     <!-- ─── LEFT: Navigation ─────────────────────────────────── -->
     <div class="space-y-2">
-      <button onclick="showSection('courses')" class="admin-nav w-full text-left px-4 py-3 rounded-lg bg-blue-50 text-blue-700 font-medium hover:bg-blue-100 transition" data-section="courses">
-        📋 Kurse verwalten
-      </button>
-      <button onclick="showSection('analytics')" class="admin-nav w-full text-left px-4 py-3 rounded-lg text-gray-600 hover:bg-blue-100 transition" data-section="analytics">
+      <button onclick="showSection('analytics')" class="admin-nav w-full text-left px-4 py-3 rounded-lg bg-blue-50 text-blue-700 font-medium hover:bg-blue-100 transition" data-section="analytics">
         📊 Analytics
+      </button>
+      <button onclick="showSection('courses')" class="admin-nav w-full text-left px-4 py-3 rounded-lg text-gray-600 hover:bg-blue-100 transition" data-section="courses">
+        📋 Kurse verwalten
       </button>
       <button onclick="showSection('users')" class="admin-nav w-full text-left px-4 py-3 rounded-lg text-gray-600 hover:bg-blue-100 transition" data-section="users">
         👥 User verwalten
@@ -36,7 +36,7 @@
     <div class="lg:col-span-2">
 
       <!-- ═══ KURSE ═══ -->
-      <div id="section-courses" class="admin-section">
+      <div id="section-courses" class="admin-section hidden">
         <div class="flex items-center justify-between mb-4">
           <h2 class="text-xl font-semibold text-gray-800">Kurse</h2>
           <button onclick="showCreateCourseModal()" class="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm hover:bg-blue-700 transition">
@@ -157,8 +157,8 @@
         </div>
       </div>
 
-      <!-- ═══ ANALYTICS ═══ -->
-      <div id="section-analytics" class="admin-section hidden">
+      <!-- ═══ ANALYTICS (Default-Sektion) ═══ -->
+      <div id="section-analytics" class="admin-section">
         <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
           <h2 class="text-xl font-semibold text-gray-800">Nutzungs-Analytics</h2>
           <select id="analytics-days" onchange="loadAnalytics()" class="border rounded px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
@@ -2601,10 +2601,12 @@
     loadAnalyticsRecent();
   }
 
-  // Section aus URL-Hash öffnen (z. B. /admin#compute — Deep-Link aus Kurs/Task-UI)
+  // Section aus URL-Hash öffnen (z. B. /admin#compute — Deep-Link aus Kurs/Task-UI);
+  // ohne Hash = Default Analytics (Daten direkt laden)
   (function () {
     const h = (location.hash || '').slice(1);
     if (h && document.getElementById('section-' + h)) showSection(h);
+    else loadAnalytics();
   })();
 </script>
 {% endblock %}
