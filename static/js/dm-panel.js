@@ -32,6 +32,8 @@
     pinned: false, // Desktop: Panel unten rechts angeheftet (bleibt beim
     // Seitenwechsel offen — Zustand in localStorage)
     pinSize: { w: 420, h: 540 },
+    restoreChatId: null, // beim Seitenwechsel-Restore: Chat öffnen, sobald
+    // die erste Chat-Liste da ist (ein Fetch statt zwei)
   };
 
   const PIN_KEY = "aicampus-dm-pin";
@@ -148,6 +150,13 @@
       if (active) active.unread_count = 0;
     }
     state.chats = chats;
+    // Seitenwechsel-Restore: gespeicherten Chat öffnen, sobald die Liste
+    // da ist (einmalig; Chat in der Zwischenzeit weg → stumm bleiben).
+    if (state.restoreChatId != null) {
+      const rid = state.restoreChatId;
+      state.restoreChatId = null;
+      if (chats.some((c) => c.id === rid)) selectChat(rid);
+    }
     updateBadge();
     if (state.open) {
       renderChatList();
@@ -257,6 +266,7 @@
 
   // ─── Chat-Verlauf ───────────────────────────────────────────────
 
+  const CHAT_EMPTY_TEXT = "Kein Chat ausgewählt — links einen auswählen oder einen neuen starten.";
   function showChatEmpty() {
     $("dm-chat-title").textContent = "";
     $("dm-chat-subtitle").textContent = "";
@@ -264,6 +274,7 @@
     $("dm-chat-menu-btn").classList.add("hidden");
     $("dm-messages").classList.add("hidden");
     $("dm-composer").classList.add("hidden");
+    $("dm-chat-empty").textContent = CHAT_EMPTY_TEXT;
     $("dm-chat-empty").classList.remove("hidden");
   }
 
@@ -302,17 +313,25 @@
     markActiveRow();
     const chat = chatDict || state.chats.find((c) => c.id === chatId);
     renderChatHeader(chat || { name: "…", is_group: false, members: [], can_manage: false });
-    $("dm-chat-empty").classList.add("hidden");
-    $("dm-messages").classList.remove("hidden");
-    $("dm-composer").classList.remove("hidden");
+    // Laden-Zustand (wie im Forum): statt leerem Verlauf + leerer Liste
+    // kurz "Nachrichten werden geladen …", dann erst der echte Inhalt.
+    const emptyEl = $("dm-chat-empty");
+    emptyEl.textContent = "Nachrichten werden geladen …";
+    emptyEl.classList.remove("hidden");
+    $("dm-messages").classList.add("hidden");
+    $("dm-composer").classList.add("hidden");
     $("dm-messages").innerHTML = "";
     scheduleMsgPoll();
     try {
       const msgs = await api(`/api/dm/chats/${chatId}/messages`);
       if (state.activeChatId !== chatId) return; // in der Zeit auf anderen Chat gewechselt
+      emptyEl.classList.add("hidden");
+      $("dm-messages").classList.remove("hidden");
+      $("dm-composer").classList.remove("hidden");
       appendMessages(msgs, true);
       markChatRead();
     } catch (e) {
+      emptyEl.textContent = "Nachrichten konnten nicht geladen werden.";
       showToast(e.message, "error");
     }
   }
@@ -840,31 +859,31 @@
     // soll aktuell sein, auch wenn das Panel zu ist. SSE (dm_message)
     // aktualisiert zusätzlich sofort; Polling ist der Fallback.
     setInterval(() => { if (!document.hidden) loadChats().catch(() => {}); }, 15000);
-    loadChats().catch(() => {});
 
     // Angeheftetes Fenster über Seitenwechsel (Voll-Reload) hinweg halten:
-    // Zustand (Pin, Größe, Chat) aus localStorage wiederherstellen und das
-    // Panel direkt wieder aufmachen.
+    // Zustand (Pin, Größe, Chat, Sichtbarkeit) aus localStorage. Der
+    // gespeicherte Chat wird von loadChats() geöffnet, sobald die Liste
+    // da ist (restoreChatId) → ein Fetch statt zwei, kein Listen-Glitch.
     const saved = loadPinState();
     if (saved && saved.pinned && window.matchMedia("(min-width: 640px)").matches) {
       state.pinned = true;
       if (saved.w && saved.h) state.pinSize = { w: saved.w, h: saved.h };
       applyPinStyle();
+      const chatId = Number(saved.chatId) || null;
+      if (chatId) {
+        state.restoreChatId = chatId;
+        // Lücke bis die Chat-Liste da ist: sofort Lade-Text statt
+        // „Kein Chat ausgewählt".
+        $("dm-chat-empty").textContent = "Nachrichten werden geladen …";
+      }
       // So weiter, wie der User es verlassen hat: ausgeblendetes Fenster
       // bleibt ausgeblendet (Bubble-Button blendet es ein).
       if (saved.open !== false) setPanelOpen(true);
-      const chatId = Number(saved.chatId) || null;
-      if (chatId) {
-        // Erst prüfen, dass der Chat noch existiert (leere 1:1-Chats
-        // verschwinden aus der Liste) → sonst stummer 404-Toast.
-        api("/api/dm/chats").then((chats) => {
-          if (state.activeChatId == null && chats.some((c) => c.id === chatId)) {
-            selectChat(chatId);
-          }
-        }).catch(() => {});
-      }
+      else loadChats().catch(() => {});
       return; // Deep-Link überschreibt einen angehefteten Zustand nicht
     }
+
+    loadChats().catch(() => {});
 
     // Deep-Link (z. B. aus einer Benachrichtigung): /messages?chat=<id>
     const chatId = new URLSearchParams(window.location.search).get("chat");
