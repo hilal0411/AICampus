@@ -320,6 +320,130 @@ def top_users(days: int, limit: int = 15) -> list[dict[str, Any]]:
     ]
 
 
+def _std(vals: list[float]) -> float:
+    """Stichproben-Standardabweichung (n<2 → 0)."""
+    n = len(vals)
+    if n < 2:
+        return 0.0
+    mean = sum(vals) / n
+    return (sum((v - mean) ** 2 for v in vals) / (n - 1)) ** 0.5
+
+
+# Versuchs-Ränge ab hier (0 = letzter Versuch, gezählt vom letzten Versuch
+# eines Students je Aufgabe) werden zu einem Bucket zusammengefasst.
+ATTEMPT_OFFSET_CAP = 10
+
+
+def feedback_performance(days: int) -> dict[str, Any]:
+    """Feedback-Performance im Fenster: Einreichungen, KI-/Menschen-Korrektur,
+    tägliche Serie, Ø-Leistung je Versuch und KI-vs.-Mensch-Vergleich.
+
+    Offizielle Punkte pro Einreichung = Mensch (Override) > LLM,
+    wie in main._get_best_score. Alle Prozentwerte beziehen sich auf die
+    erreichbaren Gesamtpunkte der Aufgabe (max_points).
+
+    Die Versuchs-Ränge zählen vom LETZTEN Versuch je (Student, Aufgabe)
+    rückwärts (0 = letzter, 1 = vorletzter, …), da die meisten Studierenden
+    bei 100 % aufhören — der letzte Versuch ist also der "Endzustand".
+    """
+    since = _since(days)
+    with Session(engine) as session:
+        daily = session.execute(
+            text(
+                "SELECT date(submitted_at) AS d, COUNT(*) AS n "
+                "FROM submissions WHERE submitted_at >= :since GROUP BY d"
+            ),
+            {"since": since},
+        ).all()
+        rows = session.execute(
+            text(
+                "SELECT s.id, s.student_id, s.task_id, s.submitted_at, "
+                "t.max_points, f.source, f.points_earned "
+                "FROM submissions s "
+                "JOIN tasks t ON t.id = s.task_id "
+                "LEFT JOIN feedback f ON f.submission_id = s.id "
+                "WHERE s.submitted_at >= :since "
+                "ORDER BY s.id"
+            ),
+            {"since": since},
+        ).all()
+
+    # Tägliche Serie mit 0 auffüllen (wie daily_active_users)
+    counts = {str(r[0]): r[1] for r in daily}
+    out_daily = []
+    today = datetime.now().date()
+    for i in range(days - 1, -1, -1):
+        d = today - timedelta(days=i)
+        out_daily.append({"date": d.isoformat(), "count": counts.get(d.isoformat(), 0)})
+
+    # Pro Einreichung: höchster LLM- + höchster Mensch-Wert
+    subs: dict[int, dict[str, Any]] = {}
+    pair_subs: dict[tuple[int, int], list[tuple[Any, int]]] = {}
+    for sub_id, student_id, task_id, submitted_at, max_points, source, points in rows:
+        info = subs.setdefault(sub_id, {
+            "max_points": max_points,
+            "llm": None,
+            "human": None,
+        })
+        pair_subs.setdefault((student_id, task_id), []).append((submitted_at, sub_id))
+        src = (source or "").upper()
+        if src == "LLM":
+            info["llm"] = max(info["llm"] or 0.0, points)
+        elif src == "HUMAN":
+            info["human"] = max(info["human"] or 0.0, points)
+
+    # Rang je (Student, Aufgabe): 0 = letzter Versuch, 1 = vorletzter, …
+    offset_of: dict[int, int] = {}
+    for lst in pair_subs.values():
+        lst.sort()
+        last = len(lst) - 1
+        for i, (_, sub_id) in enumerate(lst):
+            offset_of[sub_id] = last - i
+
+    attempts: dict[int, list[float]] = {}
+    diffs: list[float] = []
+    scatter_counts: dict[tuple[float, float], int] = {}
+    for sub_id, s in subs.items():
+        if not s["max_points"]:
+            continue
+        official = s["human"] if s["human"] is not None else s["llm"]
+        if official is not None:
+            bucket = min(offset_of[sub_id], ATTEMPT_OFFSET_CAP)
+            attempts.setdefault(bucket, []).append(
+                official / s["max_points"] * 100)
+        if s["human"] is not None and s["llm"] is not None:
+            h = s["human"] / s["max_points"] * 100
+            a = s["llm"] / s["max_points"] * 100
+            key = (round(h, 1), round(a, 1))
+            scatter_counts[key] = scatter_counts.get(key, 0) + 1
+            diffs.append(a - h)
+
+    return {
+        "days": days,
+        "submissions": len(subs),
+        "graded_by_ai": sum(1 for s in subs.values() if s["llm"] is not None),
+        "graded_by_human": sum(1 for s in subs.values() if s["human"] is not None),
+        "daily": out_daily,
+        "attempts": [
+            {
+                "offset": offset,
+                "avg": round(sum(vals) / len(vals), 1),
+                "std": round(_std(vals), 1),
+                "n": len(vals),
+            }
+            for offset, vals in sorted(attempts.items())
+        ],
+        "attempt_cap": ATTEMPT_OFFSET_CAP,
+        "scatter": [
+            {"x": x, "y": y, "n": n}
+            for (x, y), n in sorted(scatter_counts.items())
+        ],
+        "both": len(diffs),
+        "bias": round(sum(diffs) / len(diffs), 1) if diffs else None,
+        "std": round(_std(diffs), 1) if diffs else None,
+    }
+
+
 def record_mcp_event(
     user_id: int,
     course_id: Optional[int],

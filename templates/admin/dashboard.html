@@ -206,6 +206,57 @@
           </div>
         </div>
 
+        <!-- Feedback Performance -->
+        <div class="card p-4 mb-4">
+          <h3 class="font-semibold text-gray-800 mb-3">Feedback Performance</h3>
+          <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+            <div class="bg-gray-50 rounded-lg p-3 text-center">
+              <div id="fb-kpi-submissions" class="text-xl font-bold text-gray-900">–</div>
+              <div class="text-xs text-gray-500 mt-1">Einreichungen (Fenster)</div>
+            </div>
+            <div class="bg-gray-50 rounded-lg p-3 text-center">
+              <div id="fb-kpi-ai" class="text-xl font-bold text-gray-900">–</div>
+              <div class="text-xs text-gray-500 mt-1">KI-korrigiert</div>
+            </div>
+            <div class="bg-gray-50 rounded-lg p-3 text-center">
+              <div id="fb-kpi-human" class="text-xl font-bold text-gray-900">–</div>
+              <div class="text-xs text-gray-500 mt-1">Menschen-korrigiert</div>
+            </div>
+            <div class="bg-gray-50 rounded-lg p-3 text-center">
+              <div id="fb-kpi-both" class="text-xl font-bold text-gray-900">–</div>
+              <div class="text-xs text-gray-500 mt-1">beide (KI + Mensch)</div>
+            </div>
+          </div>
+          <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-4">
+            <div>
+              <h4 class="text-sm font-medium text-gray-600 mb-2">Einreichungen pro Tag</h4>
+              <div class="h-56 relative"><canvas id="fb-daily-chart"></canvas></div>
+            </div>
+            <div>
+              <h4 class="text-sm font-medium text-gray-600 mb-2">Ø-Leistung je Versuch <span class="text-gray-400 font-normal">(vom letzten Versuch gezählt; ±Std, % der erreichbaren Punkte)</span></h4>
+              <div class="h-56 relative"><canvas id="fb-attempts-chart"></canvas></div>
+            </div>
+          </div>
+          <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+            <div>
+              <h4 class="text-sm font-medium text-gray-600 mb-2">KI- vs. Menschen-Bewertung <span class="text-gray-400 font-normal">(je Abgabe, % der erreichbaren Punkte; Größe/Intensität = Anzahl gleicher Bewertungen)</span></h4>
+              <div class="h-64 relative"><canvas id="fb-scatter-chart"></canvas></div>
+            </div>
+            <div class="flex flex-col justify-center gap-3">
+              <div class="bg-gray-50 rounded-lg p-4">
+                <div class="text-xs text-gray-500">Bias (Ø KI − Mensch)</div>
+                <div id="fb-bias" class="text-2xl font-bold text-gray-900 mt-1">–</div>
+                <div class="text-xs text-gray-400 mt-1">% der erreichbaren Punkte; + = KI bewertet darüber</div>
+              </div>
+              <div class="bg-gray-50 rounded-lg p-4">
+                <div class="text-xs text-gray-500">Standardabweichung (KI − Mensch)</div>
+                <div id="fb-std" class="text-2xl font-bold text-gray-900 mt-1">–</div>
+                <div class="text-xs text-gray-400 mt-1">Streuung der Abweichung in % der erreichbaren Punkte</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- DM-Nutzung -->
         <div class="card p-4 mb-4">
           <div class="flex items-center justify-between mb-3 flex-wrap gap-2">
@@ -2046,9 +2097,41 @@
     admin: 'Admin-Konsole',
   };
   let analyticsDauChart = null;
+  let analyticsFbDailyChart = null;
+  let analyticsFbAttemptsChart = null;
+  let analyticsFbScatterChart = null;
   let analyticsDmDailyChart = null;
   let analyticsDmSizesChart = null;
   let analyticsSelectedUser = null;
+
+  // Fehlerbalken (Whiskers) für Chart.js — nutzt dataset.errorBars = [±Werte]
+  const fbErrorBarPlugin = {
+    id: 'fbErrorBars',
+    afterDatasetsDraw(chart) {
+      const meta = chart.getDatasetMeta(0);
+      const ds = chart.data.datasets[0];
+      if (!meta || !ds || !ds.errorBars || !meta.data) return;
+      const yScale = chart.scales.y;
+      const { ctx } = chart;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(59, 130, 246, 0.9)';
+      ctx.lineWidth = 1.5;
+      meta.data.forEach((pt, i) => {
+        const val = ds.data[i];
+        const err = ds.errorBars[i];
+        if (val == null || err == null || !isFinite(err)) return;
+        const x = pt.x;
+        const yTop = yScale.getPixelForValue(val + err);
+        const yBot = yScale.getPixelForValue(val - err);
+        ctx.beginPath();
+        ctx.moveTo(x, yTop); ctx.lineTo(x, yBot);
+        ctx.moveTo(x - 4, yTop); ctx.lineTo(x + 4, yTop);
+        ctx.moveTo(x - 4, yBot); ctx.lineTo(x + 4, yBot);
+        ctx.stroke();
+      });
+      ctx.restore();
+    },
+  };
 
   function analyticsPageLabel(key) {
     return ANALYTICS_PAGE_LABELS[key] || key;
@@ -2057,7 +2140,7 @@
   async function loadAnalytics() {
     const days = document.getElementById('analytics-days').value || '30';
     const courseId = document.getElementById('analytics-course').value;
-    const [ov, pages, courses, users, mcp, mcpRecent, dm] = await Promise.all([
+    const [ov, pages, courses, users, mcp, mcpRecent, dm, fb] = await Promise.all([
       fetch(`/api/admin/analytics/overview?days=${days}`, { credentials: 'same-origin' }).then(r => r.json()),
       fetch(`/api/admin/analytics/top-pages?days=${days}${courseId ? `&course_id=${courseId}` : ''}`, { credentials: 'same-origin' }).then(r => r.json()),
       fetch(`/api/admin/analytics/top-courses?days=${days}`, { credentials: 'same-origin' }).then(r => r.json()),
@@ -2065,6 +2148,7 @@
       fetch(`/api/admin/analytics/mcp?days=${days}`, { credentials: 'same-origin' }).then(r => r.json()),
       fetch('/api/admin/analytics/mcp/recent?limit=50', { credentials: 'same-origin' }).then(r => r.json()),
       fetch(`/api/admin/analytics/dm?days=${days}`, { credentials: 'same-origin' }).then(r => r.json()),
+      fetch(`/api/admin/analytics/feedback?days=${days}`, { credentials: 'same-origin' }).then(r => r.json()),
     ]);
 
     // KPIs
@@ -2098,6 +2182,133 @@
         scales: {
           y: { beginAtZero: true, ticks: { stepSize: 1 } },
           x: { grid: { display: false } },
+        },
+      },
+    });
+
+    // Feedback Performance
+    document.getElementById('fb-kpi-submissions').textContent = fb.submissions ?? 0;
+    document.getElementById('fb-kpi-ai').textContent =
+      `${fb.graded_by_ai ?? 0} (${fb.submissions ? Math.round((fb.graded_by_ai ?? 0) / fb.submissions * 100) : 0}%)`;
+    document.getElementById('fb-kpi-human').textContent =
+      `${fb.graded_by_human ?? 0} (${fb.submissions ? Math.round((fb.graded_by_human ?? 0) / fb.submissions * 100) : 0}%)`;
+    document.getElementById('fb-kpi-both').textContent = fb.both ?? 0;
+    const fmtSigned = (v) => v == null ? '–' : `${v > 0 ? '+' : ''}${v.toFixed(1)} %`;
+    document.getElementById('fb-bias').textContent = fmtSigned(fb.bias);
+    document.getElementById('fb-std').textContent = fb.std == null ? '–' : `${fb.std.toFixed(1)} %`;
+
+    const fbDailyCanvas = document.getElementById('fb-daily-chart');
+    if (analyticsFbDailyChart) analyticsFbDailyChart.destroy();
+    analyticsFbDailyChart = new Chart(fbDailyCanvas, {
+      type: 'bar',
+      data: {
+        labels: (fb.daily || []).map(d => d.date.slice(5).replace('-', '.')),
+        datasets: [{
+          label: 'Einreichungen',
+          data: (fb.daily || []).map(d => d.count),
+          backgroundColor: 'rgba(99, 102, 241, 0.55)',
+          hoverBackgroundColor: 'rgba(99, 102, 241, 0.8)',
+          borderRadius: 2,
+        }],
+      },
+      options: {
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { beginAtZero: true, ticks: { stepSize: 1 } },
+          x: { grid: { display: false } },
+        },
+      },
+    });
+
+    const attemptLabel = (a) => a.offset === 0 ? 'Letzter'
+      : a.offset === 1 ? 'Vorletzter'
+      : a.offset >= (fb.attempt_cap ?? 10) ? 'frühere'
+      : (a.offset + 1) + '.';
+    const fbAttemptsCanvas = document.getElementById('fb-attempts-chart');
+    if (analyticsFbAttemptsChart) analyticsFbAttemptsChart.destroy();
+    analyticsFbAttemptsChart = new Chart(fbAttemptsCanvas, {
+      type: 'line',
+      data: {
+        labels: (fb.attempts || []).map(attemptLabel),
+        datasets: [{
+          label: 'Ø-Leistung (%)',
+          data: (fb.attempts || []).map(a => a.avg),
+          errorBars: (fb.attempts || []).map(a => a.std),
+          borderColor: '#3b82f6',
+          backgroundColor: 'rgba(59, 130, 246, 0.7)',
+          pointBackgroundColor: '#3b82f6',
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          tension: 0.25,
+          spanGaps: true,
+        }],
+      },
+      plugins: [fbErrorBarPlugin],
+      options: {
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
+                const a = (fb.attempts || [])[ctx.dataIndex] || {};
+                return ` Ø ${ctx.parsed.y.toFixed(1)} % (±${(a.std ?? 0).toFixed(1)}, n=${a.n ?? 0})`;
+              },
+            },
+          },
+        },
+        scales: {
+          y: { min: 0, max: 100, title: { display: true, text: '% der erreichbaren Punkte' } },
+          x: { grid: { display: false } },
+        },
+      },
+    });
+
+    const fbScatterCanvas = document.getElementById('fb-scatter-chart');
+    if (analyticsFbScatterChart) analyticsFbScatterChart.destroy();
+    analyticsFbScatterChart = new Chart(fbScatterCanvas, {
+      type: 'scatter',
+      data: {
+        datasets: [
+          {
+            type: 'line',
+            label: 'y = x',
+            data: [{ x: 0, y: 0 }, { x: 100, y: 100 }],
+            showLine: true,
+            borderDash: [6, 4],
+            borderColor: 'rgba(148, 163, 184, 0.8)',
+            borderWidth: 1,
+            pointRadius: 0,
+          },
+          {
+            label: 'Abgabe (KI + Mensch)',
+            data: (fb.scatter || []).map(p => ({ x: p.x, y: p.y, n: p.n })),
+            backgroundColor: (fb.scatter || []).map(p => p.n > 1 ? 'rgba(16, 185, 129, 0.9)' : 'rgba(16, 185, 129, 0.45)'),
+            hoverBackgroundColor: 'rgba(16, 185, 129, 1)',
+            pointRadius: (fb.scatter || []).map(p => p.n > 1 ? Math.min(12, 4 + Math.sqrt(p.n) * 2) : 4),
+            pointHoverRadius: (fb.scatter || []).map(p => p.n > 1 ? Math.min(14, 6 + Math.sqrt(p.n) * 2) : 6),
+          },
+        ],
+      },
+      options: {
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            filter: (item) => item.datasetIndex === 1,
+            callbacks: {
+              label: (ctx) => {
+                const p = ctx.dataset.data[ctx.dataIndex];
+                if (!p || p.n == null) return '';
+                return ` Mensch ${p.x} % / KI ${p.y} % — ${p.n > 1 ? p.n + ' Abgaben' : '1 Abgabe'}`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: { min: 0, max: 100, title: { display: true, text: 'Menschliche Bewertung (%)' } },
+          y: { min: 0, max: 100, title: { display: true, text: 'KI-Bewertung (%)' } },
         },
       },
     });

@@ -71,6 +71,16 @@ async def recent(
     return analytics.recent_views(limit)
 
 
+@router.get("/feedback")
+async def feedback(
+    days: int = Query(30, ge=1, le=365),
+    user: User = Depends(require_global_admin()),
+):
+    """Feedback-Performance: Einreichungen, KI-/Menschen-Korrektur,
+    Ø-Leistung je Versuch, KI-vs.-Mensch (Bias + Streuung)."""
+    return analytics.feedback_performance(days)
+
+
 @router.get("/mcp")
 async def mcp_usage(
     days: int = Query(30, ge=1, le=365),
