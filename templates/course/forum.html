@@ -265,19 +265,19 @@
       <div class="flex-1 min-w-0">
         <div class="flex items-center gap-2 flex-wrap">
           ${forumProfileLink(m, `<span class="text-sm font-semibold text-gray-800 hover:underline">${escapeHtml(m.name)}</span>`)}
+          ${m.user_id !== currentUserId
+            ? `<button type="button" class="text-gray-300 hover:text-blue-600 transition shrink-0" title="Nachricht an ${escapeHtml(m.name)} senden" onclick="dmStartChat(${m.user_id})">
+                 <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+               </button>`
+            : ''}
           <span class="px-1.5 py-0.5 rounded text-[10px] font-bold ${roleClass}">${escapeHtml(m.role)}</span>
           <span class="text-xs text-gray-400">${forumTimeLabel(m.created_at)}</span>
         </div>
         <div class="forum-content text-sm text-gray-700 break-words mt-0.5"></div>
       </div>
        ${m.can_delete
-        ? `<button type="button" class="forum-delete opacity-0 group-hover:opacity-100 self-start mt-0.5 text-gray-300 hover:text-red-500 transition" data-id="${m.id}" title="Nachricht löschen">✕</button>`
-        : ''}
-       ${m.user_id !== currentUserId
-        ? `<button type="button" class="forum-dm opacity-0 group-hover:opacity-100 self-start mt-0.5 text-gray-300 hover:text-blue-600 transition" title="Nachricht an ${escapeHtml(m.name)} senden" onclick="dmStartChat(${m.user_id})">
-             <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
-           </button>`
-        : ''}
+         ? `<button type="button" class="forum-delete opacity-0 group-hover:opacity-100 self-start mt-0.5 text-gray-300 hover:text-red-500 transition" data-id="${m.id}" title="Nachricht löschen">✕</button>`
+         : ''}
     `;
     // Markdown + KaTeX + Querverweise: derselbe Renderer wie Skript/Slides
     // (breaks: einzelne Zeilenumbrüche bleiben, wie im Chat gewohnt).
