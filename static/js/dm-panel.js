@@ -28,6 +28,50 @@
     dialogMode: null, // "create" | "manage" | "view"
     selectedUserIds: [],
     searchTimer: null,
+    pinned: false, // Desktop: Panel unten rechts angeheftet (bleibt beim
+    // Seitenwechsel offen — Zustand in localStorage)
+    pinSize: { w: 420, h: 540 },
+  };
+
+  const PIN_KEY = "aicampus-dm-pin";
+  function loadPinState() {
+    try {
+      const s = JSON.parse(localStorage.getItem(PIN_KEY) || "null");
+      if (s && typeof s === "object") return s;
+    } catch { /* kaputt/privat → ignorieren */ }
+    return null;
+  }
+  function savePinState() {
+    try {
+      localStorage.setItem(PIN_KEY, JSON.stringify({
+        pinned: state.pinned,
+        w: state.pinSize.w,
+        h: state.pinSize.h,
+        chatId: state.activeChatId,
+      }));
+    } catch { /* privat → kein Remembering */ }
+  }
+  function applyPinStyle() {
+    panel.classList.toggle("dm-pinned", state.pinned);
+    panel.style.width = state.pinned ? state.pinSize.w + "px" : "";
+    panel.style.height = state.pinned ? state.pinSize.h + "px" : "";
+    updateNarrow();
+    const btn = $("dm-pin-btn");
+    if (btn) btn.classList.toggle("text-blue-600", state.pinned);
+    if (btn) btn.classList.toggle("bg-blue-50", state.pinned);
+  }
+  // Angeheftet + schmal: Master-Detail (Liste ODER Verlauf), sonst wäre
+  // der Verlauf unter ~560px unbrauchbar schmal (analog Forum/Mobilmodus).
+  // Nur messen, wenn das Panel sichtbar ist — hidden hat offsetWidth 0
+  // und würde fälschlich "narrow" melden (Bug beim Restore).
+  function updateNarrow() {
+    if (!state.open || panel.offsetWidth === 0) return;
+    panel.classList.toggle("narrow", state.pinned && panel.offsetWidth < 560);
+  }
+  window.dmTogglePin = () => {
+    state.pinned = !state.pinned;
+    applyPinStyle();
+    savePinState();
   };
 
   async function api(url, opts) {
@@ -63,6 +107,7 @@
       // reinkamen: sofort nachladen, statt auf den ersten 4-s-Poll-Tick
       // zu warten (Badge wäre sonst schneller als der Verlauf).
       if (state.activeChatId != null) pollActiveMessages();
+      updateNarrow(); // erst jetzt sichtbar → Breite wirklich messbar
     } else if (state.dialogMode) {
       dmCloseNewChat();
     }
@@ -101,6 +146,7 @@
           state.pendingChat = null;
           state.readUpTo = 0;
           panel.classList.remove("mobile-viewing");
+          savePinState(); // sonst öffnet ein Seitenwechsel den weggefallenen Chat wieder
           showChatEmpty();
           scheduleMsgPoll();
         }
@@ -189,6 +235,7 @@
     state.activeChatId = null;
     state.readUpTo = 0;
     panel.classList.remove("mobile-viewing");
+    savePinState(); // sonst öffnet ein Seitenwechsel den alten Chat wieder
     showChatEmpty();
     scheduleMsgPoll();
   };
@@ -235,6 +282,7 @@
     state.lastMsgId = 0;
     state.readUpTo = 0;
     state.renderedIds = new Set();
+    savePinState(); // angeheftetes Fenster: Chat überlebt Seitenwechsel
     panel.classList.add("mobile-viewing");
     markActiveRow();
     const chat = chatDict || state.chats.find((c) => c.id === chatId);
@@ -503,6 +551,7 @@
       if (res.deleted) {
         state.activeChatId = null;
         panel.classList.remove("mobile-viewing");
+        savePinState();
         await loadChats();
         showChatEmpty();
       } else {
@@ -667,10 +716,11 @@
           !menu.contains(e.target) && !e.target.closest("#dm-chat-menu-btn")) {
         menu.classList.add("hidden");
       }
-      // Panel: Klick außerhalb (auch auf die Navbar) schließt es.
+      // Panel: Klick außerhalb (auch auf die Navbar) schließt es —
+      // außer angeheftet (bleibt per Definition beim Klicken stehen).
       // composedPath() = Event-Pfad vom Dispatch-Zeitpunkt, bleibt valide,
       // wenn der Handler das DOM zwischenzeitlich neu gerendert hat.
-      if (!state.open) return;
+      if (!state.open || state.pinned) return;
       const wrap = $("dm-wrap");
       const path = typeof e.composedPath === "function" ? e.composedPath() : [e.target];
       if (!path.includes(panel) && !(wrap && path.includes(wrap))) setPanelOpen(false);
@@ -678,14 +728,70 @@
     document.addEventListener("keydown", (e) => {
       if (e.key !== "Escape") return;
       if (state.dialogMode) dmCloseNewChat();
-      else if (state.open) setPanelOpen(false);
+      else if (state.open && !state.pinned) setPanelOpen(false);
     });
+
+    // Resize-Handler (linke obere Ecke, nur angeheftet): ziehen vergrößert
+    // nach links/unten. Pointer-Capture, damit das Ziehen außerhalb des
+    // kleinen Handle-Bereichs nicht abbricht.
+    const resizeEl = $("dm-resize");
+    if (resizeEl) {
+      resizeEl.addEventListener("pointerdown", (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        const startX = e.clientX, startY = e.clientY;
+        const startW = panel.offsetWidth, startH = panel.offsetHeight;
+        try { resizeEl.setPointerCapture(e.pointerId); } catch { /* ignorieren */ }
+        const move = (ev) => {
+          const w = Math.min(960, Math.max(320, startW + (startX - ev.clientX)));
+          const h = Math.min(window.innerHeight - 80, Math.max(320, startH + (startY - ev.clientY)));
+          state.pinSize = { w, h };
+          panel.style.width = w + "px";
+          panel.style.height = h + "px";
+          updateNarrow();
+        };
+        const up = () => {
+          resizeEl.removeEventListener("pointermove", move);
+          resizeEl.removeEventListener("pointerup", up);
+          resizeEl.removeEventListener("pointercancel", up);
+          savePinState();
+        };
+        resizeEl.addEventListener("pointermove", move);
+        resizeEl.addEventListener("pointerup", up);
+        resizeEl.addEventListener("pointercancel", up);
+      });
+    }
+    // Viewport-Änderung (Browserfenster): Narrow-Schwelle neu prüfen.
+    window.addEventListener("resize", updateNarrow);
 
     // Badge-Poll (15 s): läuft immer — der Ungelesen-Zähler in der Navbar
     // soll aktuell sein, auch wenn das Panel zu ist. SSE (dm_message)
     // aktualisiert zusätzlich sofort; Polling ist der Fallback.
     setInterval(() => { if (!document.hidden) loadChats().catch(() => {}); }, 15000);
     loadChats().catch(() => {});
+
+    // Angeheftetes Fenster über Seitenwechsel (Voll-Reload) hinweg halten:
+    // Zustand (Pin, Größe, Chat) aus localStorage wiederherstellen und das
+    // Panel direkt wieder aufmachen.
+    const saved = loadPinState();
+    if (saved && saved.pinned && window.matchMedia("(min-width: 640px)").matches) {
+      state.pinned = true;
+      if (saved.w && saved.h) state.pinSize = { w: saved.w, h: saved.h };
+      applyPinStyle();
+      setPanelOpen(true);
+      const chatId = Number(saved.chatId) || null;
+      if (chatId) {
+        // Erst prüfen, dass der Chat noch existiert (leere 1:1-Chats
+        // verschwinden aus der Liste) → sonst stummer 404-Toast.
+        api("/api/dm/chats").then((chats) => {
+          if (state.open && state.activeChatId == null &&
+              chats.some((c) => c.id === chatId)) {
+            selectChat(chatId);
+          }
+        }).catch(() => {});
+      }
+      return; // Deep-Link überschreibt einen angehefteten Zustand nicht
+    }
 
     // Deep-Link (z. B. aus einer Benachrichtigung): /messages?chat=<id>
     const chatId = new URLSearchParams(window.location.search).get("chat");

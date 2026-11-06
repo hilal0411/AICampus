@@ -864,6 +864,57 @@
   overflow: hidden;
   box-shadow: 0 20px 50px rgba(0, 0, 0, 0.35);
 }
+/* Angehefteter Modus (Stecknadel-Button, nur Desktop): fix an die
+   rechte untere Ecke, nur die linke obere Ecke gerundet. Breite/Höhe
+   setzt das Resize-Handler-Inline-Style (Default 420x540). */
+.dm-panel.dm-pinned {
+  left: auto;
+  top: auto;
+  right: 0;
+  bottom: 0;
+  transform: none;
+  width: 420px;
+  height: 540px;
+  border-radius: 0.75rem 0 0 0;
+}
+/* Angeheftet + schmal (< 560px, JS-Klasse .narrow): Master-Detail wie im
+   Mobilmodus — ohne .mobile-viewing nur die Liste, mit nur der Verlauf
+   (Back-Button erscheint), sonst wäre der Verlauf zu schmal. */
+.dm-panel.dm-pinned.narrow #dm-chat-pane { display: none; }
+.dm-panel.dm-pinned.narrow.mobile-viewing #dm-chat-pane { display: flex; }
+.dm-panel.dm-pinned.narrow.mobile-viewing #dm-list-pane { display: none; }
+.dm-panel.dm-pinned.narrow #dm-back-btn { display: block; }
+/* Nur Liste sichtbar: sie darf die volle Breite nehmen (sonst leerer
+   Whitespace rechts neben dem 288px-Pane). */
+.dm-panel.dm-pinned.narrow:not(.mobile-viewing) #dm-list-pane {
+  width: 100%;
+  border-right: none;
+}
+#dm-resize {
+  display: none;
+}
+.dm-panel.dm-pinned #dm-resize {
+  display: block;
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 20px;
+  height: 20px;
+  cursor: nwse-resize;
+  z-index: 40;
+}
+/* Dezenter Griff-Indikator in der abgerundeten Ecke */
+.dm-panel.dm-pinned #dm-resize::before {
+  content: "";
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  width: 7px;
+  height: 7px;
+  border-top: 2px solid #9ca3af;
+  border-left: 2px solid #9ca3af;
+  border-top-left-radius: 4px;
+}
 @media (max-width: 639.98px) {
   .dm-panel {
     left: 0;
@@ -874,6 +925,16 @@
     height: calc(100dvh - 56px);
     border-radius: 0;
   }
+  /* Pinned ist ein Desktop-Feature — im Mobilmodus zählt nur Fullscreen */
+  .dm-panel.dm-pinned {
+    right: 0;
+    bottom: 0;
+    width: 100%;
+    height: calc(100vh - 56px);
+    height: calc(100dvh - 56px);
+    border-radius: 0;
+  }
+  .dm-panel.dm-pinned #dm-resize { display: none; }
   .dm-panel.mobile-viewing #dm-chat-pane { display: flex; }
   .dm-panel.mobile-viewing #dm-list-pane { display: none; }
 }
