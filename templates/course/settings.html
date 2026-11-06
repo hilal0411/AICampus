@@ -8,6 +8,9 @@
       <button onclick="showSettingsTab('settings')" class="settings-tab w-full text-left px-4 py-3 rounded-lg bg-blue-50 text-blue-700 font-medium hover:bg-blue-100 transition" data-tab="settings">
         📝 Kurs-Einstellungen
       </button>
+      <button onclick="showSettingsTab('analytics')" class="settings-tab w-full text-left px-4 py-3 rounded-lg text-gray-600 hover:bg-blue-100 transition" data-tab="analytics">
+        📊 Analytics
+      </button>
       <button onclick="showSettingsTab('import')" class="settings-tab w-full text-left px-4 py-3 rounded-lg text-gray-600 hover:bg-blue-100 transition" data-tab="import">
         📦 Kurs-Material Import
       </button>
@@ -101,6 +104,105 @@
       </div>
 
     </div>
+  </div>
+
+  <!-- Tab: Analytics (abgespeckt, nur dieser Kurs) -->
+  <div id="settings-tab-analytics" class="settings-panel hidden">
+    <div class="flex items-center justify-between mb-4 flex-wrap gap-3">
+      <h2 class="text-xl font-semibold text-gray-800">Nutzungs-Analytics <span class="text-sm font-normal text-gray-400">({{ course.name }})</span></h2>
+      <select id="ca-days" onchange="loadCourseAnalytics()" class="border rounded px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-blue-500">
+        <option value="7">Letzte 7 Tage</option>
+        <option value="14" selected>Letzte 14 Tage</option>
+        <option value="30">Letzte 30 Tage</option>
+        <option value="90">Letzte 90 Tage</option>
+      </select>
+    </div>
+
+    <!-- KPIs -->
+    <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
+      <div class="card p-4 text-center">
+        <div id="ca-kpi-dau-today" class="text-2xl font-bold text-gray-900">–</div>
+        <div class="text-xs text-gray-500 mt-1">Aktive heute (DAU)</div>
+      </div>
+      <div class="card p-4 text-center">
+        <div id="ca-kpi-dau-avg" class="text-2xl font-bold text-gray-900">–</div>
+        <div class="text-xs text-gray-500 mt-1">Ø DAU (Fenster)</div>
+      </div>
+      <div class="card p-4 text-center">
+        <div id="ca-kpi-mau" class="text-2xl font-bold text-gray-900">–</div>
+        <div class="text-xs text-gray-500 mt-1">MAU (30 Tage)</div>
+      </div>
+      <div class="card p-4 text-center">
+        <div id="ca-kpi-active-7" class="text-2xl font-bold text-gray-900">–</div>
+        <div class="text-xs text-gray-500 mt-1">Aktive (7 Tage)</div>
+      </div>
+      <div class="card p-4 text-center">
+        <div id="ca-kpi-views" class="text-2xl font-bold text-gray-900">–</div>
+        <div class="text-xs text-gray-500 mt-1">Seitenaufrufe (Fenster)</div>
+      </div>
+    </div>
+
+    <!-- DAU-Chart -->
+    <div class="card p-4 mb-4">
+      <h3 class="font-semibold text-gray-800 mb-3">Aktive User pro Tag (DAU)</h3>
+      <div class="h-64 relative">
+        <canvas id="ca-dau-chart"></canvas>
+      </div>
+    </div>
+
+    <!-- Feedback Performance -->
+    <div class="card p-4">
+      <h3 class="font-semibold text-gray-800 mb-3">Feedback Performance</h3>
+      <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+        <div class="bg-gray-50 rounded-lg p-3 text-center">
+          <div id="ca-fb-kpi-submissions" class="text-xl font-bold text-gray-900">–</div>
+          <div class="text-xs text-gray-500 mt-1">Einreichungen (Fenster)</div>
+        </div>
+        <div class="bg-gray-50 rounded-lg p-3 text-center">
+          <div id="ca-fb-kpi-ai" class="text-xl font-bold text-gray-900">–</div>
+          <div class="text-xs text-gray-500 mt-1">KI-korrigiert</div>
+        </div>
+        <div class="bg-gray-50 rounded-lg p-3 text-center">
+          <div id="ca-fb-kpi-human" class="text-xl font-bold text-gray-900">–</div>
+          <div class="text-xs text-gray-500 mt-1">Menschen-korrigiert</div>
+        </div>
+        <div class="bg-gray-50 rounded-lg p-3 text-center">
+          <div id="ca-fb-kpi-both" class="text-xl font-bold text-gray-900">–</div>
+          <div class="text-xs text-gray-500 mt-1">beide (KI + Mensch)</div>
+        </div>
+      </div>
+      <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mb-4">
+        <div>
+          <h4 class="text-sm font-medium text-gray-600 mb-2">Einreichungen pro Tag</h4>
+          <div class="h-56 relative"><canvas id="ca-fb-daily-chart"></canvas></div>
+        </div>
+        <div>
+          <h4 class="text-sm font-medium text-gray-600 mb-2">Ø-Leistung je Versuch <span class="text-gray-400 font-normal">(vom letzten Versuch gezählt; ±Std, % der erreichbaren Punkte)</span></h4>
+          <div class="h-56 relative"><canvas id="ca-fb-attempts-chart"></canvas></div>
+        </div>
+      </div>
+      <div class="grid grid-cols-1 xl:grid-cols-2 gap-4">
+        <div>
+          <h4 class="text-sm font-medium text-gray-600 mb-2">KI- vs. Menschen-Bewertung <span class="text-gray-400 font-normal">(je Abgabe, % der erreichbaren Punkte; Größe/Intensität = Anzahl gleicher Bewertungen)</span></h4>
+          <div class="h-64 relative"><canvas id="ca-fb-scatter-chart"></canvas></div>
+        </div>
+        <div class="flex flex-col justify-center gap-3">
+          <div class="bg-gray-50 rounded-lg p-4">
+            <div class="text-xs text-gray-500">Bias (Ø KI − Mensch)</div>
+            <div id="ca-fb-bias" class="text-2xl font-bold text-gray-900 mt-1">–</div>
+            <div class="text-xs text-gray-400 mt-1">% der erreichbaren Punkte; + = KI bewertet darüber</div>
+          </div>
+          <div class="bg-gray-50 rounded-lg p-4">
+            <div class="text-xs text-gray-500">Standardabweichung (KI − Mensch)</div>
+            <div id="ca-fb-std" class="text-2xl font-bold text-gray-900 mt-1">–</div>
+            <div class="text-xs text-gray-400 mt-1">Streuung der Abweichung in % der erreichbaren Punkte</div>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Chart.js (MIT) — lokal gespiegelt -->
+    <script src="{{ asset('vendor/chart.umd.js') }}"></script>
   </div>
 
   <!-- Tab: Kurs-Material Import (3-Stufen-Wizard) -->
@@ -251,7 +353,7 @@
 
   <script>
   function showSettingsTab(tab) {
-    if (tab !== 'settings' && tab !== 'import' && tab !== 'compute' && tab !== 'trash') tab = 'settings';
+    if (tab !== 'settings' && tab !== 'analytics' && tab !== 'import' && tab !== 'compute' && tab !== 'trash') tab = 'settings';
     document.querySelectorAll('.settings-panel').forEach((el) => el.classList.add('hidden'));
     document.getElementById('settings-tab-' + tab).classList.remove('hidden');
 
@@ -264,7 +366,225 @@
     activeBtn.classList.add('bg-blue-50', 'text-blue-700', 'font-medium');
     activeBtn.classList.remove('text-gray-600');
 
+    // Analytics: Daten vom Server laden
+    if (tab === 'analytics') loadCourseAnalytics();
+
     history.replaceState(null, '', tab === 'settings' ? location.pathname : '#' + tab);
+  }
+
+  // ─── Kurs-Analytics (DAU + Feedback Performance, nur dieser Kurs) ──
+  let caDauChart = null;
+  let caFbDailyChart = null;
+  let caFbAttemptsChart = null;
+  let caFbScatterChart = null;
+
+  // Fehlerbalken (Whiskers) für Chart.js — nutzt dataset.errorBars = [±Werte]
+  const caErrorBarPlugin = {
+    id: 'caErrorBars',
+    afterDatasetsDraw(chart) {
+      const meta = chart.getDatasetMeta(0);
+      const ds = chart.data.datasets[0];
+      if (!meta || !ds || !ds.errorBars || !meta.data) return;
+      const yScale = chart.scales.y;
+      const { ctx } = chart;
+      ctx.save();
+      ctx.strokeStyle = 'rgba(59, 130, 246, 0.9)';
+      ctx.lineWidth = 1.5;
+      meta.data.forEach((pt, i) => {
+        const val = ds.data[i];
+        const err = ds.errorBars[i];
+        if (val == null || err == null || !isFinite(err)) return;
+        const x = pt.x;
+        const yTop = yScale.getPixelForValue(val + err);
+        const yBot = yScale.getPixelForValue(val - err);
+        ctx.beginPath();
+        ctx.moveTo(x, yTop); ctx.lineTo(x, yBot);
+        ctx.moveTo(x - 4, yTop); ctx.lineTo(x + 4, yTop);
+        ctx.moveTo(x - 4, yBot); ctx.lineTo(x + 4, yBot);
+        ctx.stroke();
+      });
+      ctx.restore();
+    },
+  };
+
+  async function loadCourseAnalytics() {
+    const days = document.getElementById('ca-days').value || '14';
+    const data = await fetch(`/api/courses/${courseId}/analytics?days=${days}`, { credentials: 'same-origin' }).then(r => r.json());
+    const fb = data.feedback || {};
+
+    // KPIs
+    document.getElementById('ca-kpi-dau-today').textContent = data.dau_today ?? 0;
+    document.getElementById('ca-kpi-dau-avg').textContent = data.dau_avg ?? 0;
+    document.getElementById('ca-kpi-mau').textContent = data.mau_30 ?? 0;
+    document.getElementById('ca-kpi-active-7').textContent = data.active_last7 ?? 0;
+    document.getElementById('ca-kpi-views').textContent = data.total_views ?? 0;
+
+    // DAU-Chart
+    const dauCanvas = document.getElementById('ca-dau-chart');
+    if (caDauChart) caDauChart.destroy();
+    caDauChart = new Chart(dauCanvas, {
+      type: 'line',
+      data: {
+        labels: (data.dau || []).map(d => d.date.slice(5).replace('-', '.')),
+        datasets: [{
+          label: 'Aktive User',
+          data: (data.dau || []).map(d => d.count),
+          borderColor: '#3b82f6',
+          backgroundColor: 'rgba(59, 130, 246, 0.12)',
+          fill: true,
+          tension: 0.25,
+          pointRadius: 2,
+          pointHoverRadius: 4,
+        }],
+      },
+      options: {
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { beginAtZero: true, ticks: { stepSize: 1 } },
+          x: { grid: { display: false } },
+        },
+      },
+    });
+
+    // Feedback Performance
+    document.getElementById('ca-fb-kpi-submissions').textContent = fb.submissions ?? 0;
+    document.getElementById('ca-fb-kpi-ai').textContent =
+      `${fb.graded_by_ai ?? 0} (${fb.submissions ? Math.round((fb.graded_by_ai ?? 0) / fb.submissions * 100) : 0}%)`;
+    document.getElementById('ca-fb-kpi-human').textContent =
+      `${fb.graded_by_human ?? 0} (${fb.submissions ? Math.round((fb.graded_by_human ?? 0) / fb.submissions * 100) : 0}%)`;
+    document.getElementById('ca-fb-kpi-both').textContent = fb.both ?? 0;
+    const fmtSigned = (v) => v == null ? '–' : `${v > 0 ? '+' : ''}${v.toFixed(1)} %`;
+    document.getElementById('ca-fb-bias').textContent = fmtSigned(fb.bias);
+    document.getElementById('ca-fb-std').textContent = fb.std == null ? '–' : `${fb.std.toFixed(1)} %`;
+
+    const fbDailyCanvas = document.getElementById('ca-fb-daily-chart');
+    if (caFbDailyChart) caFbDailyChart.destroy();
+    caFbDailyChart = new Chart(fbDailyCanvas, {
+      type: 'bar',
+      data: {
+        labels: (fb.daily || []).map(d => d.date.slice(5).replace('-', '.')),
+        datasets: [{
+          label: 'Einreichungen',
+          data: (fb.daily || []).map(d => d.count),
+          backgroundColor: 'rgba(99, 102, 241, 0.55)',
+          hoverBackgroundColor: 'rgba(99, 102, 241, 0.8)',
+          borderRadius: 2,
+        }],
+      },
+      options: {
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { beginAtZero: true, ticks: { stepSize: 1 } },
+          x: { grid: { display: false } },
+        },
+      },
+    });
+
+    const attemptCap = fb.attempt_cap ?? 10;
+    const attemptLabel = (a) => a.offset === 0 ? 'Letzter'
+      : a.offset === 1 ? 'Vorletzter'
+      : a.offset >= attemptCap ? 'frühere'
+      : (a.offset + 1) + '.';
+    // Ränge ohne bewertete Abgaben im Fenster mit null auffüllen (lückenlose Skala)
+    const attemptBuckets = {};
+    (fb.attempts || []).forEach(a => { attemptBuckets[a.offset] = a; });
+    const regularOffsets = Object.keys(attemptBuckets).map(Number).filter(o => o < attemptCap);
+    const attemptSeries = [];
+    for (let o = 0; o <= (regularOffsets.length ? Math.max(...regularOffsets) : 0); o++) {
+      attemptSeries.push(attemptBuckets[o] || { offset: o, avg: null, std: null, n: 0 });
+    }
+    if (attemptBuckets[attemptCap]) attemptSeries.push(attemptBuckets[attemptCap]);
+    // Spiegeln: älteste Versuche links, letzter Versuch rechts
+    attemptSeries.reverse();
+    const fbAttemptsCanvas = document.getElementById('ca-fb-attempts-chart');
+    if (caFbAttemptsChart) caFbAttemptsChart.destroy();
+    caFbAttemptsChart = new Chart(fbAttemptsCanvas, {
+      type: 'line',
+      data: {
+        labels: attemptSeries.map(attemptLabel),
+        datasets: [{
+          label: 'Ø-Leistung (%)',
+          data: attemptSeries.map(a => a.avg),
+          errorBars: attemptSeries.map(a => a.std),
+          borderColor: '#3b82f6',
+          backgroundColor: 'rgba(59, 130, 246, 0.7)',
+          pointBackgroundColor: '#3b82f6',
+          pointRadius: 4,
+          pointHoverRadius: 6,
+          tension: 0.25,
+          spanGaps: true,
+        }],
+      },
+      plugins: [caErrorBarPlugin],
+      options: {
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
+                const a = attemptSeries[ctx.dataIndex] || {};
+                return ` Ø ${ctx.parsed.y.toFixed(1)} % (±${(a.std ?? 0).toFixed(1)}, n=${a.n ?? 0})`;
+              },
+            },
+          },
+        },
+        scales: {
+          y: { min: 0, max: 100, title: { display: true, text: '% der erreichbaren Punkte' } },
+          x: { grid: { display: false } },
+        },
+      },
+    });
+
+    const fbScatterCanvas = document.getElementById('ca-fb-scatter-chart');
+    if (caFbScatterChart) caFbScatterChart.destroy();
+    caFbScatterChart = new Chart(fbScatterCanvas, {
+      type: 'scatter',
+      data: {
+        datasets: [
+          {
+            type: 'line',
+            label: 'y = x',
+            data: [{ x: 0, y: 0 }, { x: 100, y: 100 }],
+            showLine: true,
+            borderDash: [6, 4],
+            borderColor: 'rgba(148, 163, 184, 0.8)',
+            borderWidth: 1,
+            pointRadius: 0,
+          },
+          {
+            label: 'Abgabe (KI + Mensch)',
+            data: (fb.scatter || []).map(p => ({ x: p.x, y: p.y, n: p.n })),
+            backgroundColor: (fb.scatter || []).map(p => p.n > 1 ? 'rgba(16, 185, 129, 0.9)' : 'rgba(16, 185, 129, 0.45)'),
+            hoverBackgroundColor: 'rgba(16, 185, 129, 1)',
+            pointRadius: (fb.scatter || []).map(p => p.n > 1 ? Math.min(12, 4 + Math.sqrt(p.n) * 2) : 4),
+            pointHoverRadius: (fb.scatter || []).map(p => p.n > 1 ? Math.min(14, 6 + Math.sqrt(p.n) * 2) : 6),
+          },
+        ],
+      },
+      options: {
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            filter: (item) => item.datasetIndex === 1,
+            callbacks: {
+              label: (ctx) => {
+                const p = ctx.dataset.data[ctx.dataIndex];
+                if (!p || p.n == null) return '';
+                return ` Mensch ${p.x} % / KI ${p.y} % — ${p.n > 1 ? p.n + ' Abgaben' : '1 Abgabe'}`;
+              },
+            },
+          },
+        },
+        scales: {
+          x: { min: 0, max: 100, title: { display: true, text: 'Menschliche Bewertung (%)' } },
+          y: { min: 0, max: 100, title: { display: true, text: 'KI-Bewertung (%)' } },
+        },
+      },
+    });
   }
   showSettingsTab(location.hash.slice(1));
   </script>

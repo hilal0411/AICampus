@@ -209,16 +209,22 @@ def _since(days: int) -> datetime:
     return datetime.now() - timedelta(days=days)
 
 
-def daily_active_users(days: int) -> list[dict[str, Any]]:
-    """Aktive User pro Tag im Fenster (Lücken mit 0 aufgefüllt)."""
+def daily_active_users(days: int, course_id: Optional[int] = None) -> list[dict[str, Any]]:
+    """Aktive User pro Tag im Fenster (Lücken mit 0 aufgefüllt).
+
+    course_id: nur Page-Views dieser Kurse (Kurs-DAU).
+    """
+    sql = (
+        "SELECT date(created_at) AS d, COUNT(DISTINCT user_id) AS n "
+        "FROM page_views WHERE created_at >= :since"
+    )
+    params: dict[str, Any] = {"since": _since(days)}
+    if course_id is not None:
+        sql += " AND course_id = :course_id"
+        params["course_id"] = course_id
+    sql += " GROUP BY d"
     with Session(engine) as session:
-        rows = session.execute(
-            text(
-                "SELECT date(created_at) AS d, COUNT(DISTINCT user_id) AS n "
-                "FROM page_views WHERE created_at >= :since GROUP BY d"
-            ),
-            {"since": _since(days)},
-        ).all()
+        rows = session.execute(text(sql), params).all()
     counts = {str(r[0]): r[1] for r in rows}
     out = []
     today = datetime.now().date()
@@ -287,26 +293,27 @@ def avg_users_by_hour(days: int) -> list[dict[str, Any]]:
     ]
 
 
-def count_active_users(days: int) -> int:
+def count_active_users(days: int, course_id: Optional[int] = None) -> int:
     """Distinct Users mit ≥1 Page-View im Fenster (Basis für MAU)."""
+    sql = "SELECT COUNT(DISTINCT user_id) FROM page_views WHERE created_at >= :since"
+    params: dict[str, Any] = {"since": _since(days)}
+    if course_id is not None:
+        sql += " AND course_id = :course_id"
+        params["course_id"] = course_id
     with Session(engine) as session:
-        row = session.execute(
-            text(
-                "SELECT COUNT(DISTINCT user_id) FROM page_views "
-                "WHERE created_at >= :since"
-            ),
-            {"since": _since(days)},
-        ).first()
+        row = session.execute(text(sql), params).first()
     return row[0] if row else 0
 
 
-def count_views(days: int) -> int:
+def count_views(days: int, course_id: Optional[int] = None) -> int:
     """Anzahl Page-Views im Fenster."""
+    sql = "SELECT COUNT(*) FROM page_views WHERE created_at >= :since"
+    params: dict[str, Any] = {"since": _since(days)}
+    if course_id is not None:
+        sql += " AND course_id = :course_id"
+        params["course_id"] = course_id
     with Session(engine) as session:
-        row = session.execute(
-            text("SELECT COUNT(*) FROM page_views WHERE created_at >= :since"),
-            {"since": _since(days)},
-        ).first()
+        row = session.execute(text(sql), params).first()
     return row[0] if row else 0
 
 
@@ -393,7 +400,7 @@ def _std(vals: list[float]) -> float:
 ATTEMPT_OFFSET_CAP = 10
 
 
-def feedback_performance(days: int) -> dict[str, Any]:
+def feedback_performance(days: int, course_id: Optional[int] = None) -> dict[str, Any]:
     """Feedback-Performance im Fenster: Einreichungen, KI-/Menschen-Korrektur,
     tägliche Serie, Ø-Leistung je Versuch und KI-vs.-Mensch-Vergleich.
 
@@ -404,15 +411,22 @@ def feedback_performance(days: int) -> dict[str, Any]:
     Die Versuchs-Ränge zählen vom LETZTEN Versuch je (Student, Aufgabe)
     rückwärts (0 = letzter, 1 = vorletzter, …), da die meisten Studierenden
     bei 100 % aufhören — der letzte Versuch ist also der "Endzustand".
+
+    course_id: nur Aufgaben dieses Kurses (Kurs-Feedback).
     """
     since = _since(days)
+    course_filter = " AND t.course_id = :course_id" if course_id is not None else ""
+    params: dict[str, Any] = {"since": since}
+    if course_id is not None:
+        params["course_id"] = course_id
     with Session(engine) as session:
         daily = session.execute(
             text(
-                "SELECT date(submitted_at) AS d, COUNT(*) AS n "
-                "FROM submissions WHERE submitted_at >= :since GROUP BY d"
+                "SELECT date(s.submitted_at) AS d, COUNT(*) AS n "
+                "FROM submissions s JOIN tasks t ON t.id = s.task_id "
+                "WHERE s.submitted_at >= :since" + course_filter + " GROUP BY d"
             ),
-            {"since": since},
+            params,
         ).all()
         rows = session.execute(
             text(
@@ -421,10 +435,10 @@ def feedback_performance(days: int) -> dict[str, Any]:
                 "FROM submissions s "
                 "JOIN tasks t ON t.id = s.task_id "
                 "LEFT JOIN feedback f ON f.submission_id = s.id "
-                "WHERE s.submitted_at >= :since "
+                "WHERE s.submitted_at >= :since" + course_filter + " "
                 "ORDER BY s.id"
             ),
-            {"since": since},
+            params,
         ).all()
 
     # Tägliche Serie mit 0 auffüllen (wie daily_active_users)

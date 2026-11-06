@@ -9,9 +9,9 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, Query
 
-from database.models import User
+from database.models import CourseRole, User
 from services import analytics
-from services.auth_service import require_global_admin
+from services.auth_service import require_course_access, require_global_admin
 
 router = APIRouter(prefix="/api/admin/analytics", tags=["Analytics"])
 
@@ -118,3 +118,30 @@ async def user_views(
 ):
     """Page-View-Historie eines einzelnen Users."""
     return analytics.recent_views(limit, user_id=user_id)
+
+
+# ═══ Kurs-Analytics (PROF/TUTOR/Admin — Kurs-Einstellungen) ══════
+
+course_router = APIRouter(prefix="/api/courses/{course_id}/analytics", tags=["Analytics"])
+
+
+@course_router.get("")
+async def course_overview(
+    days: int = Query(30, ge=1, le=365),
+    user_and_course: tuple[User, int] = Depends(
+        require_course_access(CourseRole.PROF, CourseRole.TUTOR)
+    ),
+):
+    """Abgespecktes Analytics für einen Kurs: DAU-KPIs + Serie + Feedback-Performance."""
+    _user, course_id = user_and_course
+    dau = analytics.daily_active_users(days, course_id=course_id)
+    return {
+        "days": days,
+        "dau": dau,
+        "dau_avg": round(sum(d["count"] for d in dau) / days, 1) if days else 0,
+        "dau_today": dau[-1]["count"] if dau else 0,
+        "mau_30": analytics.count_active_users(30, course_id=course_id),
+        "active_last7": analytics.count_active_users(7, course_id=course_id),
+        "total_views": analytics.count_views(days, course_id=course_id),
+        "feedback": analytics.feedback_performance(days, course_id=course_id),
+    }
