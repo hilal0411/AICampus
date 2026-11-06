@@ -228,6 +228,65 @@ def daily_active_users(days: int) -> list[dict[str, Any]]:
     return out
 
 
+def avg_users_by_weekday(days: int) -> list[dict[str, Any]]:
+    """Ø aktive User je Wochentag (Mo..So) im Fenster.
+
+    Durchschnitt der täglichen DAU-Werte über alle Vorkommnisse des
+    Wochentags (s. daily_active_users).
+    """
+    series = daily_active_users(days)
+    sums = [0.0] * 7
+    counts = [0] * 7
+    for entry in series:
+        wd = datetime.fromisoformat(entry["date"]).weekday()  # Mo=0
+        sums[wd] += entry["count"]
+        counts[wd] += 1
+    return [
+        {
+            "weekday": wd,
+            "avg": round(sums[wd] / counts[wd], 1) if counts[wd] else None,
+            "days": counts[wd],
+        }
+        for wd in range(7)
+    ]
+
+
+def _hour_of(ts: Any) -> int:
+    """Stunde aus rohem SQL-Zeitstempel (datetime ODER String)."""
+    if hasattr(ts, "hour"):
+        return ts.hour
+    return int(str(ts)[11:13])
+
+
+def avg_users_by_hour(days: int) -> list[dict[str, Any]]:
+    """Ø aktive User je Uhrzeit (0-1 … 23-24) im Fenster.
+
+    Für jede Stunde: Ø der täglichen distinct-User-Zahlen über alle
+    Tage des Fensters (Tage ohne Aktivität zählen mit 0).
+    """
+    since = _since(days)
+    with Session(engine) as session:
+        rows = session.execute(
+            text(
+                "SELECT date(created_at) AS d, created_at, user_id "
+                "FROM page_views WHERE created_at >= :since"
+            ),
+            {"since": since},
+        ).all()
+    per_day_hour: dict[tuple[str, int], set[int]] = {}
+    for d, ts, uid in rows:
+        per_day_hour.setdefault((str(d), _hour_of(ts)), set()).add(uid)
+    return [
+        {
+            "hour": h,
+            "avg": round(
+                sum(len(s) for (d, hh), s in per_day_hour.items() if hh == h) / days, 1
+            ),
+        }
+        for h in range(24)
+    ]
+
+
 def count_active_users(days: int) -> int:
     """Distinct Users mit ≥1 Page-View im Fenster (Basis für MAU)."""
     with Session(engine) as session:

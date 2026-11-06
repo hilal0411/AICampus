@@ -31,6 +31,8 @@ async def overview(
         "mau_30": analytics.count_active_users(30),
         "active_last7": analytics.count_active_users(7),
         "total_views": analytics.count_views(days),
+        "users_by_weekday": analytics.avg_users_by_weekday(days),
+        "users_by_hour": analytics.avg_users_by_hour(days),
     }
 
 

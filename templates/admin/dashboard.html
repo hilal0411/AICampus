@@ -204,6 +204,16 @@
           <div class="h-64 relative">
             <canvas id="dau-chart"></canvas>
           </div>
+          <div class="grid grid-cols-1 xl:grid-cols-2 gap-4 mt-4">
+            <div>
+              <h4 class="text-sm font-medium text-gray-600 mb-2">Ø aktive User je Wochentag</h4>
+              <div class="h-40 relative"><canvas id="dau-weekday-chart"></canvas></div>
+            </div>
+            <div>
+              <h4 class="text-sm font-medium text-gray-600 mb-2">Ø aktive User je Uhrzeit</h4>
+              <div class="h-40 relative"><canvas id="dau-hour-chart"></canvas></div>
+            </div>
+          </div>
         </div>
 
         <!-- Feedback Performance -->
@@ -2097,6 +2107,8 @@
     admin: 'Admin-Konsole',
   };
   let analyticsDauChart = null;
+  let analyticsDauWeekdayChart = null;
+  let analyticsDauHourChart = null;
   let analyticsFbDailyChart = null;
   let analyticsFbAttemptsChart = null;
   let analyticsFbScatterChart = null;
@@ -2182,6 +2194,61 @@
         scales: {
           y: { beginAtZero: true, ticks: { stepSize: 1 } },
           x: { grid: { display: false } },
+        },
+      },
+    });
+
+    // DAU: Ø je Wochentag + je Uhrzeit
+    const dauWeekdayCanvas = document.getElementById('dau-weekday-chart');
+    if (analyticsDauWeekdayChart) analyticsDauWeekdayChart.destroy();
+    analyticsDauWeekdayChart = new Chart(dauWeekdayCanvas, {
+      type: 'bar',
+      data: {
+        labels: ['Mo', 'Di', 'Mi', 'Do', 'Fr', 'Sa', 'So'],
+        datasets: [{
+          label: 'Ø aktive User',
+          data: (ov.users_by_weekday || []).map(w => w.avg ?? 0),
+          backgroundColor: 'rgba(59, 130, 246, 0.55)',
+          hoverBackgroundColor: 'rgba(59, 130, 246, 0.8)',
+          borderRadius: 2,
+        }],
+      },
+      options: {
+        maintainAspectRatio: false,
+        plugins: { legend: { display: false } },
+        scales: {
+          y: { beginAtZero: true },
+          x: { grid: { display: false } },
+        },
+      },
+    });
+    const dauHourCanvas = document.getElementById('dau-hour-chart');
+    if (analyticsDauHourChart) analyticsDauHourChart.destroy();
+    analyticsDauHourChart = new Chart(dauHourCanvas, {
+      type: 'bar',
+      data: {
+        labels: Array.from({ length: 24 }, (_, h) => String(h)),
+        datasets: [{
+          label: 'Ø aktive User',
+          data: (ov.users_by_hour || []).map(h => h.avg ?? 0),
+          backgroundColor: 'rgba(59, 130, 246, 0.55)',
+          hoverBackgroundColor: 'rgba(59, 130, 246, 0.8)',
+          borderRadius: 2,
+        }],
+      },
+      options: {
+        maintainAspectRatio: false,
+        plugins: {
+          legend: { display: false },
+          tooltip: {
+            callbacks: {
+              title: (items) => `${items[0].label} – ${Number(items[0].label) + 1} Uhr`,
+            },
+          },
+        },
+        scales: {
+          y: { beginAtZero: true },
+          x: { grid: { display: false }, title: { display: true, text: 'Uhrzeit' } },
         },
       },
     });
