@@ -21,7 +21,7 @@ from sqlmodel import Session, select
 
 from config import PUSH_APP_URL, VAPID_PRIVATE_KEY, push_enabled
 from database.base import engine
-from database.models import Course, ForumChannelMute, Notification, PushSubscription, User, UserCourse
+from database.models import Course, DmChatMember, ForumChannelMute, Notification, PushSubscription, User, UserCourse
 from services.timeutil import utc_iso
 
 logger = logging.getLogger(__name__)
@@ -94,6 +94,20 @@ def push_forum_message(session: Session, course_id: int, channel_id: int, messag
         logger.exception("[Notifications] Forum-Live-Event (Kurs %s, Kanal %s) fehlgeschlagen.", course_id, channel_id)
 
 
+def push_dm_message(session: Session, chat_id: int, message_id: int) -> None:
+    """Live-Event (SSE): neue DM → offene DM-Panels der Mitglieder updaten.
+
+    Wie push_forum_message: alle Chat-Mitglieder (inkl. Absender, dessen
+    Fetch idempotent ist) bekommen das Event; Payload ohne Inhalt.
+    """
+    try:
+        payload = {"event": "dm_message", "chat_id": chat_id, "message_id": message_id}
+        for uid in chat_member_ids(session, chat_id):
+            _push(uid, payload)
+    except Exception:
+        logger.exception("[Notifications] DM-Live-Event (Chat %s) fehlgeschlagen.", chat_id)
+
+
 def push_content_updated(session: Session, course_id: int, entity_type: str, entity_id: int,
                          origin_type: str | None = None,
                          origin_media: str | None = None) -> None:
@@ -140,6 +154,7 @@ def _payload(n: Notification) -> dict[str, Any]:
         "body": n.body,
         "link": n.link,
         "course_id": n.course_id,
+        "chat_id": n.chat_id,
         "read": n.read_at is not None,
         "created_at": utc_iso(n.created_at),
     }
@@ -164,6 +179,7 @@ def _create_many(
     link: str,
     course_id: Optional[int] = None,
     channel_id: Optional[int] = None,
+    chat_id: Optional[int] = None,
     actor_id: Optional[int] = None,
 ) -> None:
     """Legt Benachrichtigungen für mehrere Empfänger an + Live-Push."""
@@ -175,6 +191,7 @@ def _create_many(
             user_id=uid,
             course_id=course_id,
             channel_id=channel_id,
+            chat_id=chat_id,
             actor_id=actor_id,
             type=type_,
             title=title[:200],
@@ -195,6 +212,15 @@ def course_member_ids(session: Session, course_id: int) -> list[int]:
     return list(
         session.exec(
             select(UserCourse.user_id).where(UserCourse.course_id == course_id)
+        ).all()
+    )
+
+
+def chat_member_ids(session: Session, chat_id: int) -> list[int]:
+    """Alle Mitglieder (DmChatMember-Zeilen) eines Chats."""
+    return list(
+        session.exec(
+            select(DmChatMember.user_id).where(DmChatMember.chat_id == chat_id)
         ).all()
     )
 

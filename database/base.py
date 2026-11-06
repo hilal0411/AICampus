@@ -227,6 +227,7 @@ def migrate_schema():
         },
         "notifications": {
             "channel_id": "INTEGER",  # Forum-Kanal (nur forum_message; Auto-Read beim Kanal-Besuch)
+            "chat_id": "INTEGER",  # DM-Chat (nur dm_message; Auto-Read beim Chat-Öffnen)
         },
         "mcp_tokens": {
             "allow_write": "BOOLEAN DEFAULT 1",  # PAT-Write-Schalter (Einstellungen → MCP)

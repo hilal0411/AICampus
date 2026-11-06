@@ -1113,6 +1113,105 @@ class ForumChannelMute(SQLModel, table=True):
 
 
 # ═══════════════════════════════════════════════════════════════════
+# MESSAGING (Direktnachrichten + Gruppenchats, plattform-weit;
+# Architektur-Basis: Kurs-Forum, s. docs/LLM-plans/messaging.md)
+# ═══════════════════════════════════════════════════════════════════
+
+class DmChatBase(SQLModel):
+    # NULL = 1:1-Chat (Titel wird aus dem Gegenüber abgeleitet)
+    name: Optional[str] = Field(default=None, max_length=100)
+    created_by: int = Field(foreign_key="users.id")
+    created_at: datetime = Field(default_factory=datetime.now)
+
+
+class DmChat(DmChatBase, table=True):
+    __tablename__ = "dm_chats"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    members: List["DmChatMember"] = Relationship()
+    messages: List["DmMessage"] = Relationship()
+
+
+class DmChatMember(SQLModel, table=True):
+    """Mitgliedschaft in einem Chat (N:M Chat↔User).
+
+    Neue Tabelle wird beim App-Start per create_all angelegt.
+    """
+
+    __tablename__ = "dm_chat_members"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    chat_id: int = Field(foreign_key="dm_chats.id", index=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    joined_at: datetime = Field(default_factory=datetime.now)
+
+    __table_args__ = (UniqueConstraint("chat_id", "user_id"),)
+
+
+class DmMessageBase(SQLModel):
+    chat_id: int = Field(foreign_key="dm_chats.id", index=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    content: str = Field(max_length=5000)
+    created_at: datetime = Field(default_factory=datetime.now)
+
+
+class DmMessage(DmMessageBase, table=True):
+    __tablename__ = "dm_messages"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+
+    user: Optional["User"] = Relationship()
+
+
+class DmChatReadState(SQLModel, table=True):
+    """Letzter gelesener Nachrichten-Stand je User und Chat.
+
+    Basis für die Ungelesen-Zähler: Alle Nachrichten mit
+    id > last_read_message_id sind ungelesen (0 = Chat noch nie gelesen).
+    Neue Tabelle wird beim App-Start per create_all angelegt.
+    """
+
+    __tablename__ = "dm_chat_read_state"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    chat_id: int = Field(foreign_key="dm_chats.id", index=True)
+    user_id: int = Field(foreign_key="users.id", index=True)
+    last_read_message_id: int = Field(default=0)
+
+    __table_args__ = (UniqueConstraint("chat_id", "user_id"),)
+
+
+class DmChatCreate(SQLModel):
+    member_id: int  # 1:1-Chat mit diesem User (bestehender wird wiederverwendet)
+
+
+class DmGroupChatCreate(SQLModel):
+    name: str = Field(min_length=1, max_length=100)
+    member_ids: List[int] = Field(min_length=1, max_length=100)
+
+
+class DmChatUpdate(SQLModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=100)
+
+
+class DmMessageCreate(SQLModel):
+    content: str = Field(min_length=1, max_length=5000)
+
+
+class DmMessageRead(SQLModel):
+    id: int
+    chat_id: int
+    user_id: int
+    content: str
+    created_at: datetime
+    username: str
+    name: str
+    avatar: Optional[str] = None
+    is_self: bool = False
+
+
+# ═══════════════════════════════════════════════════════════════════
 # SKRIPT-FRAGEN (Studenten-Fragen zum Skript, inkl. LLM- +
 # Human-Antworten; für Tutoren/Profs zur Skript-Verbesserung)
 # ═══════════════════════════════════════════════════════════════════
@@ -1277,6 +1376,7 @@ class Notification(SQLModel, table=True):
     - "forum_message": neue Forum-Nachricht (alle Kurs-Mitglieder außer Absender)
     - "script_question_answer": neue Antwort auf eine Skript-Frage (Fragesteller)
     - "llm_feedback": LLM-Feedback nach Abgabe (Student; Erfolg oder Fehler)
+    - "dm_message": neue Direktnachricht (alle Chat-Mitglieder außer Absender)
 
     title/body sind beim Erstellen vor-berechnete Snapshots (kein Join nötig
     für die Listen-Anzeige). Neue Tabelle wird beim App-Start per create_all
@@ -1289,8 +1389,9 @@ class Notification(SQLModel, table=True):
     user_id: int = Field(foreign_key="users.id", index=True)  # Empfänger
     course_id: Optional[int] = Field(default=None, foreign_key="courses.id", index=True)
     channel_id: Optional[int] = Field(default=None, index=True)  # Forum-Kanal (nur forum_message)
+    chat_id: Optional[int] = Field(default=None, index=True)  # DM-Chat (nur dm_message; Auto-Read beim Chat-Öffnen)
     actor_id: Optional[int] = Field(default=None, foreign_key="users.id")  # None = System (LLM)
-    # "forum_message" | "script_question_answer" | "llm_feedback"
+    # "forum_message" | "script_question_answer" | "llm_feedback" | "dm_message"
     type: str = Field(max_length=30)
     title: str = Field(max_length=200)
     body: str = Field(default="", max_length=500)

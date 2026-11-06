@@ -17,9 +17,19 @@
     <div class="min-w-0">
       <h1 class="text-3xl font-bold text-gray-800 truncate">{{ profile_user.name }}</h1>
       <p class="text-gray-500 mt-0.5">@{{ profile_user.username }}</p>
-      {% if is_own_profile %}
-      <a href="/settings" class="inline-block mt-2 text-sm text-blue-600 hover:text-blue-800 transition">✏️ Steckbrief bearbeiten</a>
-      {% endif %}
+      <div class="mt-2">
+        {% if is_own_profile %}
+        <a href="/settings" class="inline-block text-sm text-blue-600 hover:text-blue-800 transition">✏️ Steckbrief bearbeiten</a>
+        {% endif %}
+        {% if current_user and not is_own_profile %}
+        <button type="button" onclick="dmStartChat({{ profile_user.id }})"
+                class="inline-flex items-center gap-1.5 text-sm px-3 py-1.5 ml-2 rounded-lg bg-blue-600 text-white hover:bg-blue-700 transition"
+                title="Nachricht an {{ profile_user.name }} senden">
+          <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+          Nachricht schreiben
+        </button>
+        {% endif %}
+      </div>
     </div>
   </div>
 

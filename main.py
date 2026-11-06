@@ -82,7 +82,7 @@ from services.slides_service import (
     slide_count,
 )
 
-from api import admin, agent_api, analytics as analytics_api, auth, forum, importer, image_specs, media as media_api, materials as materials_api, mcp_context, mcp_oauth, mcp_server as mcp_server_api, mcp_tokens, notifications as notifications_api, push as push_api, references, review_workspace, script as script_api, script_questions, slides as slides_api, student, tutor, user_settings, course_members, versions as versions_api
+from api import admin, agent_api, analytics as analytics_api, auth, course_members, dm, forum, importer, image_specs, media as media_api, materials as materials_api, mcp_context, mcp_oauth, mcp_server as mcp_server_api, mcp_tokens, notifications as notifications_api, push as push_api, references, review_workspace, script as script_api, script_questions, slides as slides_api, student, tutor, user_settings, versions as versions_api
 
 
 def _calculate_percentile(my_score: float, other_scores: list[float]) -> int:
@@ -424,6 +424,7 @@ app.include_router(references.router)
 app.include_router(slides_api.router)
 app.include_router(script_api.router)
 app.include_router(forum.router)
+app.include_router(dm.router)  # /api/dm/… (Direktnachrichten + Gruppenchats)
 app.include_router(script_questions.router)
 app.include_router(notifications_api.router)  # /api/notifications/… (in-App-Glocke)
 app.include_router(push_api.router)  # /api/push/… (M3: Browser-Push-Subscriptions)
@@ -927,6 +928,7 @@ async def user_profile_page(
             "Abschlussarbeiten, Hobbys."
         ),
         "profile_user": {
+            "id": user.id,
             "username": user.username,
             "name": user.name,
             "avatar": f"/avatars/{user.avatar.rsplit('/', 1)[-1]}" if user.avatar else None,
@@ -948,6 +950,28 @@ async def user_profile_page(
             "is_own_profile": viewer.id == user.id,
         })
     return templates.TemplateResponse("profile.html", ctx)
+
+
+@app.get("/messages")
+async def messages_page(
+    request: Request,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Dünne Landing-Seite fürs DM-Panel (Deep-Link aus Notifications).
+
+    Das Panel öffnet dm-panel.js automatisch bei ?chat=<id>; der Seitenaufbau
+    ist nur ein Fallback-Hinweis für den Fall, dass das Panel nicht öffnet.
+    """
+    display_role = "Admin" if user.role == GlobalUserRole.ADMIN else "User"
+    return templates.TemplateResponse("messages.html", {
+        "request": request,
+        "page_title": "Nachrichten",
+        "current_user": _user_ctx(user, display_role),
+        "courses": _get_user_courses(user, session),
+        "selected_course_id": None,
+        "is_admin": user.role == GlobalUserRole.ADMIN,
+    })
 
 
 @app.get("/datenschutz")

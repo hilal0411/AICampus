@@ -185,6 +185,7 @@
   // ausgeblendet) → das Tab-Badge darf beim Lesen/Neuem darin nicht verringert werden.
   const activeChannelMuted = {% if active_channel and active_channel.muted %}true{% else %}false{% endif %};
   const forumBase = `/api/courses/${courseId}/forum`;
+  const currentUserId = {{ current_user.id }};
 
   const forumList = document.getElementById('forum-messages');
   const forumInput = document.getElementById('forum-input');
@@ -269,8 +270,13 @@
         </div>
         <div class="forum-content text-sm text-gray-700 break-words mt-0.5"></div>
       </div>
-      ${m.can_delete
+       ${m.can_delete
         ? `<button type="button" class="forum-delete opacity-0 group-hover:opacity-100 self-start mt-0.5 text-gray-300 hover:text-red-500 transition" data-id="${m.id}" title="Nachricht löschen">✕</button>`
+        : ''}
+       ${m.user_id !== currentUserId
+        ? `<button type="button" class="forum-dm opacity-0 group-hover:opacity-100 self-start mt-0.5 text-gray-300 hover:text-blue-600 transition" title="Nachricht an ${escapeHtml(m.name)} senden" onclick="dmStartChat(${m.user_id})">
+             <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+           </button>`
         : ''}
     `;
     // Markdown + KaTeX + Querverweise: derselbe Renderer wie Skript/Slides
