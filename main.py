@@ -82,6 +82,7 @@ from services.slides_service import (
     slide_count,
 )
 
+from api import blind_grading
 from api import admin, agent_api, analytics as analytics_api, auth, course_members, dm, forum, importer, image_specs, media as media_api, materials as materials_api, mcp_context, mcp_oauth, mcp_server as mcp_server_api, mcp_tokens, notifications as notifications_api, push as push_api, references, review_workspace, script as script_api, script_questions, slides as slides_api, student, tutor, user_settings, versions as versions_api
 
 
@@ -416,6 +417,7 @@ app.include_router(analytics_api.router)
 app.include_router(analytics_api.course_router)
 app.include_router(image_specs.router)
 app.include_router(tutor.router)
+app.include_router(blind_grading.router)  # /api/blind/… (Blind-Grading-Studie)
 app.include_router(course_members.router)
 app.include_router(student.router)
 app.include_router(review_workspace.router)  # /api/review/… (Review-Workspace)
@@ -664,6 +666,16 @@ def _course_tab_context(
                 "label": "Übersicht",
                 "url": f"/courses/{course_id}/overview",
                 "active": active_tab == "overview",
+            }
+        )
+    if is_tutor or is_admin:
+        tabs.append(
+            {
+                "key": "blind",
+                "icon": "🙈",
+                "label": "Blind-Bewertung",
+                "url": f"/courses/{course_id}/blind-grading",
+                "active": active_tab == "blind",
             }
         )
     # Forum: für alle Kurs-Mitglieder (Student/Tutor/PROF) + Admins
@@ -2593,6 +2605,26 @@ async def overview_page(
 
     ctx["page_title"] = f"Übersicht — {ctx['course']['name']}"
     return templates.TemplateResponse("course/overview.html", ctx)
+
+
+@app.get("/courses/{course_id}/blind-grading")
+async def blind_grading_page(
+    course_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Kurs-Tab 'Blind-Bewertung' (Studie): Tutor:innen bewerten Antworten
+    ohne LLM- oder fremde Bewertungen zu sehen (PROF/Tutor/Admin)."""
+    membership, ctx = _course_tab_context(
+        session, user, request, course_id, active_tab="blind"
+    )
+    is_admin = user.role == GlobalUserRole.ADMIN
+    if not is_admin and (not membership or membership.role_in_course not in (CourseRole.PROF, CourseRole.TUTOR)):
+        raise HTTPException(403, "Nur für PROF/Tutor.")
+    ctx["page_title"] = f"Blind-Bewertung — {ctx['course']['name']}"
+    ctx["can_manage_study"] = is_admin or membership.role_in_course == CourseRole.PROF  # type: ignore[union-attr]
+    return templates.TemplateResponse("course/blind_grading.html", ctx)
 
 
 @app.get("/courses/{course_id}/live", response_class=HTMLResponse)

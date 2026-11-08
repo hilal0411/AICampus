@@ -1,0 +1,248 @@
+{% extends "course/base.html" %}
+
+{# ─────────────────────────────────────────────────────────────────────
+   Blind-Bewertung (Studie, s. docs/blind-grading.md)
+
+   Tutor:innen sehen nur: Aufgabe, Musterlösung, Antwort, Punktefeld.
+   NIE: LLM-Bewertungen, Bewertungen anderer, beabsichtigte Punkte,
+   Fehlertyp oder Herkunft der Antwort. Bewertungen hier ändern keine
+   echten Noten und lösen keine Benachrichtigungen aus.
+   ───────────────────────────────────────────────────────────────────── #}
+
+{% block course_content %}
+
+  {% if can_manage_study %}
+  <!-- PROF/Admin: Studie verwalten -->
+  <details id="study-admin" class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+    <summary class="cursor-pointer font-semibold text-gray-800">⚙️ Studie verwalten (nur PROF/Admin)</summary>
+    <div class="mt-4 grid gap-4 md:grid-cols-3">
+      <div class="md:col-span-1">
+        <div id="study-summary" class="text-sm text-gray-700 space-y-1">Lade …</div>
+      </div>
+      <div class="md:col-span-2 space-y-3">
+        <form id="import-form" class="flex flex-wrap items-center gap-2">
+          <input type="file" id="import-file" accept=".csv,.json"
+                 class="text-sm border border-gray-300 rounded-lg px-2 py-1.5">
+          <button type="submit" class="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">
+            Antworten importieren
+          </button>
+        </form>
+        <p class="text-xs text-gray-500">
+          CSV (Komma oder Semikolon) oder JSON mit den Spalten
+          <code>task_key, task_title, task_description, model_solution, max_points, answer</code>,
+          optional <code>intended_points, error_type, source</code> (werden Tutor:innen nie angezeigt).
+          Vorlage: <code>docs/blind-grading-example.csv</code>
+        </p>
+        <a href="/api/blind/courses/{{ course.id }}/export.csv"
+           class="inline-block px-3 py-1.5 rounded-lg border border-gray-300 text-sm font-medium text-gray-700 hover:bg-gray-50">
+          ⬇ Alle Bewertungen als CSV exportieren
+        </a>
+      </div>
+    </div>
+  </details>
+  {% endif %}
+
+  <!-- Hinweis + Fortschritt -->
+  <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 mb-6">
+    <div class="flex items-center justify-between flex-wrap gap-3">
+      <div>
+        <h2 class="text-lg font-semibold text-gray-800">🙈 Blind-Bewertung</h2>
+        <p class="text-sm text-gray-500">
+          Bewerte jede Antwort selbstständig anhand von Aufgabe und Musterlösung.
+          KI-Bewertungen und Bewertungen anderer sind ausgeblendet.
+          Deine Punkte haben keinen Einfluss auf echte Noten.
+        </p>
+      </div>
+      <div class="min-w-[180px]">
+        <div class="text-sm text-gray-600 mb-1"><span id="progress-text">–</span></div>
+        <div class="w-full bg-gray-100 rounded-full h-2">
+          <div id="progress-bar" class="bg-blue-600 h-2 rounded-full transition-all" style="width:0%"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Leerzustand / fertig -->
+  <div id="empty-state" class="hidden bg-white rounded-xl shadow-sm border border-gray-200 p-8 text-center text-gray-600"></div>
+
+  <!-- Aktuelle Antwort -->
+  <div id="item-view" class="hidden space-y-4">
+    <div class="bg-white rounded-xl shadow-sm border border-gray-200 p-5">
+      <div class="flex items-baseline justify-between gap-3 mb-3">
+        <h3 class="font-semibold text-gray-800">Aufgabe: <span id="task-title"></span></h3>
+        <span class="text-xs text-gray-400">Antwort <span id="item-position"></span></span>
+      </div>
+      <div id="task-description" class="prose max-w-none text-sm"></div>
+    </div>
+
+    <div class="grid gap-4 md:grid-cols-2">
+      <div class="bg-green-50 rounded-xl border border-green-200 p-5">
+        <h4 class="text-sm font-semibold text-green-800 mb-2">✅ Musterlösung</h4>
+        <div id="model-solution" class="prose max-w-none text-sm"></div>
+      </div>
+      <div class="bg-blue-50 rounded-xl border border-blue-200 p-5">
+        <h4 class="text-sm font-semibold text-blue-800 mb-2">✍️ Zu bewertende Antwort</h4>
+        <div id="answer" class="prose max-w-none text-sm"></div>
+      </div>
+    </div>
+
+    <form id="rating-form" class="bg-white rounded-xl shadow-sm border border-gray-200 p-5 space-y-3">
+      <div class="flex items-center gap-3 flex-wrap">
+        <label for="points" class="text-sm font-medium text-gray-700">Punkte</label>
+        <input type="number" id="points" step="0.5" min="0" required
+               class="w-28 border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500">
+        <span class="text-sm text-gray-500">von <span id="max-points"></span></span>
+        <span id="edit-hint" class="hidden text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-0.5">
+          Du hast diese Antwort schon bewertet und änderst gerade deine Bewertung.
+        </span>
+      </div>
+      <div>
+        <label for="comment" class="block text-sm font-medium text-gray-700 mb-1">Begründung (optional)</label>
+        <textarea id="comment" rows="3"
+                  class="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-blue-500"
+                  placeholder="Kurz: Was war richtig, was fehlte?"></textarea>
+      </div>
+      <div class="flex items-center gap-3">
+        <button type="submit" class="px-4 py-2 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">
+          Speichern &amp; nächste Antwort
+        </button>
+        <button type="button" id="show-mine" class="text-sm text-gray-500 hover:text-gray-700 underline">
+          Meine Bewertungen
+        </button>
+      </div>
+    </form>
+  </div>
+
+  <!-- Eigene Bewertungen -->
+  <div id="mine-view" class="hidden bg-white rounded-xl shadow-sm border border-gray-200 p-5 mt-6">
+    <h3 class="font-semibold text-gray-800 mb-3">Meine Bewertungen</h3>
+    <table class="w-full text-sm">
+      <thead><tr class="text-left text-gray-500"><th class="py-1">#</th><th>Aufgabe</th><th>Punkte</th><th></th></tr></thead>
+      <tbody id="mine-body"></tbody>
+    </table>
+  </div>
+
+<script>
+(function () {
+  const api = `/api/blind/courses/${courseId}`;
+  let current = null;
+  let shownAt = Date.now();
+
+  const $ = (id) => document.getElementById(id);
+
+  function setProgress(p) {
+    $("progress-text").textContent = `${p.done} von ${p.total} bewertet`;
+    $("progress-bar").style.width = p.total ? `${Math.round(100 * p.done / p.total)}%` : "0%";
+  }
+
+  async function md(text, el) {
+    el.textContent = text || "–";
+    if (typeof renderMarkdown === "function" && text) {
+      try { await renderMarkdown(text, el); } catch (e) { el.textContent = text; }
+    }
+  }
+
+  async function load(itemId) {
+    const url = itemId ? `${api}/next?item_id=${itemId}` : `${api}/next`;
+    const res = await fetch(url, { credentials: "same-origin" });
+    const data = await res.json();
+    if (!res.ok) { showToast(data.detail || "Fehler beim Laden.", "error"); return; }
+    setProgress(data.progress);
+
+    if (!data.item) {
+      current = null;
+      $("item-view").classList.add("hidden");
+      $("empty-state").classList.remove("hidden");
+      $("empty-state").innerHTML = data.finished
+        ? "🎉 Fertig! Du hast alle Antworten bewertet. Danke!"
+        : "Noch keine Antworten importiert.";
+      return;
+    }
+    current = data.item;
+    $("empty-state").classList.add("hidden");
+    $("item-view").classList.remove("hidden");
+    $("task-title").textContent = current.task_title;
+    $("item-position").textContent = `${data.position} / ${data.progress.total}`;
+    $("max-points").textContent = current.max_points;
+    $("points").max = current.max_points;
+    // Bewusst KEIN Vorschlagswert (kein Anker): Feld leer, außer bei eigener Nachbearbeitung
+    $("points").value = data.own_rating ? data.own_rating.points : "";
+    $("comment").value = data.own_rating ? data.own_rating.comment : "";
+    $("edit-hint").classList.toggle("hidden", !data.own_rating);
+    await md(current.task_description, $("task-description"));
+    await md(current.model_solution, $("model-solution"));
+    await md(current.answer, $("answer"));
+    shownAt = Date.now();
+    window.scrollTo({ top: 0, behavior: "instant" });
+    $("points").focus();
+  }
+
+  $("rating-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    if (!current) return;
+    const points = parseFloat($("points").value);
+    if (isNaN(points) || points < 0 || points > current.max_points) {
+      showToast(`Bitte 0 bis ${current.max_points} Punkte eingeben.`, "error"); return;
+    }
+    const res = await fetch(`${api}/items/${current.id}/rating`, {
+      method: "POST", credentials: "same-origin",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ points, comment: $("comment").value,
+                             seconds_spent: (Date.now() - shownAt) / 1000 }),
+    });
+    const data = await res.json();
+    if (!res.ok) { showToast(data.detail || "Fehler beim Speichern.", "error"); return; }
+    showToast("Gespeichert.", "success");
+    $("mine-view").classList.add("hidden");
+    load();
+  });
+
+  $("show-mine").addEventListener("click", async () => {
+    const res = await fetch(`${api}/my-ratings`, { credentials: "same-origin" });
+    const rows = await res.json();
+    const body = $("mine-body");
+    body.innerHTML = "";
+    rows.forEach((r) => {
+      const tr = document.createElement("tr");
+      tr.className = "border-t border-gray-100";
+      tr.innerHTML = `<td class="py-1">${r.position}</td><td></td><td>${r.points} / ${r.max_points}</td>
+        <td><button class="text-blue-600 hover:underline">bearbeiten</button></td>`;
+      tr.children[1].textContent = r.task_title;
+      tr.querySelector("button").onclick = () => load(r.item_id);
+      body.appendChild(tr);
+    });
+    if (!rows.length) body.innerHTML = '<tr><td colspan="4" class="py-2 text-gray-500">Noch keine Bewertungen.</td></tr>';
+    $("mine-view").classList.remove("hidden");
+  });
+
+  {% if can_manage_study %}
+  async function loadSummary() {
+    const res = await fetch(`${api}/summary`, { credentials: "same-origin" });
+    const s = await res.json();
+    const raters = s.raters.map((r) => `${r.name}: ${r.rated}`).join(", ") || "–";
+    $("study-summary").innerHTML =
+      `<div><b>${s.items}</b> Antworten in <b>${s.tasks}</b> Aufgaben</div>
+       <div><b>${s.human_ratings}</b> Tutor-Bewertungen</div>
+       <div><b>${s.model_ratings}</b> Modell-Bewertungen</div>
+       <div class="text-xs text-gray-500 mt-2">Modelle: ${s.models.join(", ") || "–"}</div>
+       <div class="text-xs text-gray-500">Tutor:innen: <span id="raters"></span></div>`;
+    $("raters").textContent = raters;
+  }
+  $("import-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const f = $("import-file").files[0];
+    if (!f) { showToast("Bitte eine Datei auswählen.", "error"); return; }
+    const fd = new FormData(); fd.append("file", f);
+    const res = await fetch(`${api}/import`, { method: "POST", credentials: "same-origin", body: fd });
+    const data = await res.json();
+    if (!res.ok) { showToast(data.detail || "Import fehlgeschlagen.", "error"); return; }
+    showToast(`${data.imported} Antworten importiert.`, "success");
+    loadSummary(); load();
+  });
+  loadSummary();
+  {% endif %}
+
+  load();
+})();
+</script>
+{% endblock %}

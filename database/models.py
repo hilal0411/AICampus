@@ -1631,3 +1631,65 @@ class McpClientContext(SQLModel, table=True):
     slide_count: Optional[int] = Field(default=None)
     slide_text: Optional[str] = Field(default=None, max_length=2000)
     updated_at: datetime = Field(default_factory=datetime.now, index=True)
+
+# ═══════════════════════════════════════════════════════════════════
+# BLIND-GRADING-STUDIE (Projektgruppe: Varianz Tutor:innen vs. LLMs)
+# ═══════════════════════════════════════════════════════════════════
+#
+# Bewusst KOMPLETT getrennt von Task/Submission/Feedback:
+# - Studien-Antworten sind (synthetische) Testdaten, keine echten Abgaben
+#   → tauchen nicht in Übersicht/Punkten/Statistik des Kurses auf.
+# - Tutor-Bewertungen hier ändern keine Noten und lösen keine
+#   Benachrichtigungen aus.
+# - Pro Antwort beliebig viele Bewertungen (eine je Tutor:in), damit die
+#   Streuung zwischen Menschen messbar ist.
+# Details: docs/blind-grading.md
+
+class StudyItem(SQLModel, table=True):
+    """Eine zu bewertende Antwort (inkl. Aufgabe + Musterlösung)."""
+    __tablename__ = "study_items"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    course_id: int = Field(foreign_key="courses.id", index=True)
+    task_key: str = Field(max_length=100, index=True)     # gruppiert Antworten derselben Aufgabe, z. B. "swt-ue01-a1"
+    task_title: str = Field(max_length=300)
+    task_description: str                                 # Aufgabenstellung (Markdown)
+    model_solution: str = Field(default="")               # Musterlösung (Markdown)
+    max_points: float = Field(ge=0)
+    answer: str                                           # die zu bewertende (synthetische) Antwort
+    # Nur für die Auswertung — wird Tutor:innen NIE angezeigt:
+    intended_points: Optional[float] = Field(default=None)  # beabsichtigte Punktzahl beim Erstellen
+    error_type: Optional[str] = Field(default=None, max_length=100)  # z. B. "korrekt", "fehlkonzept", "off-topic"
+    source: Optional[str] = Field(default=None, max_length=100)      # z. B. "handgeschrieben", "llm:qwen3"
+    created_at: datetime = Field(default_factory=datetime.now)
+
+
+class StudyRating(SQLModel, table=True):
+    """Blinde Bewertung einer StudyItem-Antwort durch eine:n Tutor:in."""
+    __tablename__ = "study_ratings"
+    __table_args__ = (UniqueConstraint("item_id", "rater_id", name="uq_study_rating_item_rater"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    item_id: int = Field(foreign_key="study_items.id", index=True)
+    rater_id: int = Field(foreign_key="users.id", index=True)
+    points: float = Field(ge=0)
+    comment: str = Field(default="")
+    seconds_spent: Optional[float] = Field(default=None)  # Bearbeitungszeit im Browser
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+
+class StudyModelRating(SQLModel, table=True):
+    """Bewertung einer StudyItem-Antwort durch ein LLM (ein Lauf)."""
+    __tablename__ = "study_model_ratings"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    item_id: int = Field(foreign_key="study_items.id", index=True)
+    model: str = Field(max_length=200, index=True)        # z. B. "Qwen3-32B"
+    run: int = Field(default=1)                           # Wiederholung (Selbst-Konsistenz)
+    prompt_version: str = Field(default="default", max_length=100)
+    points: Optional[float] = Field(default=None)         # None = Lauf fehlgeschlagen
+    comment: str = Field(default="")
+    error: Optional[str] = Field(default=None)
+    latency_ms: Optional[int] = Field(default=None)
+    created_at: datetime = Field(default_factory=datetime.now)
