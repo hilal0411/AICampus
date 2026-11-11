@@ -15,7 +15,7 @@ from sqlmodel import Session, select
 
 from database.base import get_session
 from database.models import (
-    Course, CourseRole, GlobalUserRole, StudyItem, StudyRating, User, UserCourse,
+    Course, CourseRole, GlobalUserRole, StudyItem, StudyModelEndpoint, StudyRating, User, UserCourse,
 )
 from services import blind_grading_service as bgs
 from services.auth_service import get_current_user
@@ -190,3 +190,168 @@ async def export_csv(
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": f'attachment; filename="blind-grading-kurs{course_id}.csv"'},
     )
+
+
+# ─── PROF / Admin: Modelle (LLM-Endpoints) verwalten ───────────
+
+def _load_endpoint(session: Session, course_id: int, endpoint_id: int) -> StudyModelEndpoint:
+    ep = session.get(StudyModelEndpoint, endpoint_id)
+    if not ep or ep.course_id != course_id:
+        raise HTTPException(404, "Modell nicht gefunden.")
+    return ep
+
+
+def _endpoint_fields(body: dict, partial: bool = False) -> dict:
+    out = {}
+    for key in ("name", "api_url", "model", "api_key"):
+        if key in body and body[key] is not None:
+            out[key] = str(body[key]).strip()
+    if "enabled" in body:
+        out["enabled"] = bool(body["enabled"])
+    if not partial:
+        for key in ("api_url", "model"):
+            if not out.get(key):
+                raise HTTPException(400, f"'{key}' fehlt.")
+        out["name"] = out.get("name") or out["model"]
+    if "api_url" in out and not out["api_url"].startswith(("http://", "https://")):
+        raise HTTPException(400, "Die API-URL muss mit http:// oder https:// beginnen.")
+    return out
+
+
+@router.get("/courses/{course_id}/endpoints")
+async def list_endpoints(
+    course_id: int,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    _require_prof(user, course_id, session)
+    eps = session.exec(
+        select(StudyModelEndpoint).where(StudyModelEndpoint.course_id == course_id).order_by(StudyModelEndpoint.id)
+    ).all()
+    return [bgs.endpoint_public(e) for e in eps]
+
+
+@router.post("/courses/{course_id}/endpoints")
+async def add_endpoint(
+    course_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Modell hinzufügen (beliebige OpenAI-kompatible API)."""
+    _require_prof(user, course_id, session)
+    data = _endpoint_fields(await request.json())
+    if session.exec(select(StudyModelEndpoint).where(StudyModelEndpoint.course_id == course_id)
+                    .where(StudyModelEndpoint.name == data["name"])).first():
+        raise HTTPException(400, f"Es gibt schon ein Modell mit dem Namen '{data['name']}'.")
+    ep = StudyModelEndpoint(course_id=course_id, **data)
+    session.add(ep)
+    session.commit()
+    session.refresh(ep)
+    return bgs.endpoint_public(ep)
+
+
+@router.patch("/courses/{course_id}/endpoints/{endpoint_id}")
+async def update_endpoint(
+    course_id: int,
+    endpoint_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Aktivieren/deaktivieren oder Felder ändern. Der Name bleibt fest, damit
+    bisherige Ergebnisse eindeutig zugeordnet bleiben."""
+    _require_prof(user, course_id, session)
+    ep = _load_endpoint(session, course_id, endpoint_id)
+    data = _endpoint_fields(await request.json(), partial=True)
+    data.pop("name", None)
+    if data.get("api_key") == "":
+        data.pop("api_key")  # leeres Feld = Key unverändert lassen
+    for k, v in data.items():
+        setattr(ep, k, v)
+    session.add(ep)
+    session.commit()
+    return bgs.endpoint_public(ep)
+
+
+@router.delete("/courses/{course_id}/endpoints/{endpoint_id}")
+async def delete_endpoint(
+    course_id: int,
+    endpoint_id: int,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Modell entfernen. Bereits gespeicherte Bewertungen bleiben erhalten."""
+    _require_prof(user, course_id, session)
+    ep = _load_endpoint(session, course_id, endpoint_id)
+    session.delete(ep)
+    session.commit()
+    return {"ok": True}
+
+
+@router.post("/courses/{course_id}/endpoints/{endpoint_id}/test")
+async def test_endpoint(
+    course_id: int,
+    endpoint_id: int,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Testaufruf mit der ersten importierten Antwort (oder einem Mini-Beispiel).
+    Speichert nichts."""
+    _require_prof(user, course_id, session)
+    ep = _load_endpoint(session, course_id, endpoint_id)
+    item = session.exec(select(StudyItem).where(StudyItem.course_id == course_id).order_by(StudyItem.id)).first()
+    if item is None:
+        item = StudyItem(course_id=course_id, task_key="test", task_title="Test",
+                         task_description="Was ist 2 + 2?", model_solution="4", max_points=1, answer="4")
+    from services.llm_service import LLMService
+    r = await bgs.grade_item(LLMService(), item, bgs.endpoint_config(ep, timeout=120))
+    return {"ok": r["points"] is not None, **r, "max_points": item.max_points}
+
+
+@router.post("/courses/{course_id}/runs")
+async def start_run(
+    course_id: int,
+    request: Request,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    """Alle Antworten von allen aktiven Modellen bewerten lassen (Hintergrund).
+    Bereits vorhandene Läufe werden übersprungen."""
+    _require_prof(user, course_id, session)
+    body = await request.json()
+    try:
+        runs = int(body.get("runs", 3))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "Ungültige Anzahl Wiederholungen.")
+    if not 1 <= runs <= 20:
+        raise HTTPException(400, "Wiederholungen: 1 bis 20.")
+    try:
+        job = bgs.start_job(course_id, runs)
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
+    return job.public()
+
+
+@router.get("/courses/{course_id}/runs/status")
+async def run_status(
+    course_id: int,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    _require_prof(user, course_id, session)
+    job = bgs.get_job(course_id)
+    return job.public() if job else {"status": "idle"}
+
+
+@router.post("/courses/{course_id}/runs/cancel")
+async def cancel_run(
+    course_id: int,
+    session: Session = Depends(get_session),
+    user: User = Depends(get_current_user),
+):
+    _require_prof(user, course_id, session)
+    job = bgs.get_job(course_id)
+    if job and job.status == "running":
+        job.cancel = True
+    return {"ok": True}

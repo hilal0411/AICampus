@@ -17,6 +17,9 @@ Beispiele:
   python scripts/study_run_models.py --course 3 \\
       --models "Qwen3-32B=http://gpu1:8000/v1,qwen3:8b=http://localhost:11434/v1"
 
+Ohne --models/--api-url werden die Modelle genommen, die im Tab
+„Blind-Bewertung“ eingetragen und aktiv sind.
+
 Bereits vorhandene Läufe (gleiches Modell, Run, Prompt-Version) werden
 übersprungen — das Skript kann also jederzeit fortgesetzt werden.
 """
@@ -24,7 +27,6 @@ import argparse
 import asyncio
 import os
 import sys
-import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -32,8 +34,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from sqlmodel import Session, select  # noqa: E402
 
 from database.base import create_db_and_tables, engine  # noqa: E402
-from database.models import StudyItem, StudyModelRating  # noqa: E402
-from services.llm_service import LLMService  # noqa: E402
+from database.models import StudyItem, StudyModelEndpoint  # noqa: E402
+from services import blind_grading_service as bgs  # noqa: E402
 from services.settings_resolver import get_effective_llm_config  # noqa: E402
 
 
@@ -47,64 +49,29 @@ def parse_models(spec: str, default_url: str) -> list[tuple[str, str]]:
 
 async def run(args) -> int:
     create_db_and_tables()
-    llm = LLMService()
     with Session(engine) as session:
-        base = get_effective_llm_config(session, args.course)
-        items = session.exec(select(StudyItem).where(StudyItem.course_id == args.course)).all()
-        if not items:
+        if not session.exec(select(StudyItem.id).where(StudyItem.course_id == args.course)).first():
             print(f"Kurs {args.course}: keine Studien-Antworten importiert.")
             return 1
-        models = parse_models(args.models or base["model"], args.api_url or base["api_url"])
+        base = get_effective_llm_config(session, args.course)
         api_key = args.api_key or os.getenv("STUDY_API_KEY") or base["api_key"]
+        ui_eps = session.exec(
+            select(StudyModelEndpoint).where(StudyModelEndpoint.course_id == args.course)
+            .where(StudyModelEndpoint.enabled == True)  # noqa: E712
+        ).all()
+        if args.models or args.api_url or not ui_eps:
+            # Modelle von der Kommandozeile (bzw. Fallback: Modell aus den Settings)
+            endpoints = [(name, {"api_url": url, "api_key": api_key, "model": name, "timeout": args.timeout})
+                         for name, url in parse_models(args.models or base["model"], args.api_url or base["api_url"])]
+        else:
+            # Modelle, die in der Oberfläche (Tab „Blind-Bewertung“) eingetragen und aktiv sind
+            endpoints = [(e.name, bgs.endpoint_config(e, args.timeout)) for e in ui_eps]
         prompt = base.get("grading_prompt") if args.prompt_version == "default" else None
-        if args.prompt_file:
-            prompt = Path(args.prompt_file).read_text(encoding="utf-8")
-
-        total = len(items) * len(models) * args.runs
-        done = 0
-        for model, url in models:
-            cfg = {"api_url": url, "api_key": api_key, "model": model, "timeout": args.timeout}
-            for item in items:
-                for run_no in range(1, args.runs + 1):
-                    done += 1
-                    exists = session.exec(
-                        select(StudyModelRating)
-                        .where(StudyModelRating.item_id == item.id)
-                        .where(StudyModelRating.model == model)
-                        .where(StudyModelRating.run == run_no)
-                        .where(StudyModelRating.prompt_version == args.prompt_version)
-                        .where(StudyModelRating.points != None)  # noqa: E711  (fehlgeschlagene neu versuchen)
-                    ).first()
-                    if exists:
-                        continue
-                    t0 = time.monotonic()
-                    res = await llm.grade_text_task(
-                        task_description=item.task_description,
-                        model_solution=item.model_solution or "(Keine Musterloesung hinterlegt — bitte eigenstaendig bewerten)",
-                        student_solution=item.answer,
-                        max_points=int(item.max_points) if float(item.max_points).is_integer() else item.max_points,  # type: ignore[arg-type]
-                        custom_prompt=prompt,
-                        previous_feedback="",
-                        config=cfg,
-                    )
-                    ms = int((time.monotonic() - t0) * 1000)
-                    points, comment, error = None, "", None
-                    if res.get("success"):
-                        data = res.get("data") or {}
-                        try:
-                            points = max(0.0, min(float(data.get("points")), item.max_points))
-                        except (TypeError, ValueError):
-                            error = f"Keine gültige Punktzahl: {data.get('points')!r}"
-                        comment = str(data.get("feedback") or "")
-                    else:
-                        error = str(res.get("error") or "unbekannter Fehler")
-                    session.add(StudyModelRating(
-                        item_id=item.id, model=model, run=run_no, prompt_version=args.prompt_version,  # type: ignore[arg-type]
-                        points=points, comment=comment, error=error, latency_ms=ms,
-                    ))
-                    session.commit()
-                    status = f"{points:g}/{item.max_points:g}" if points is not None else f"FEHLER: {error}"
-                    print(f"[{done}/{total}] {model} · Item {item.id} · Lauf {run_no}: {status} ({ms} ms)")
+    if args.prompt_file:
+        prompt = Path(args.prompt_file).read_text(encoding="utf-8")
+    print("Modelle:", ", ".join(n for n, _ in endpoints))
+    job = await bgs.run_models(args.course, endpoints, args.runs, args.prompt_version, prompt)
+    print(job.message)
     return 0
 
 

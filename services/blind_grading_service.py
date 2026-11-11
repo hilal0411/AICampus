@@ -8,15 +8,20 @@ Abgaben noch Noten.
 
 from __future__ import annotations
 
+import asyncio
 import csv
 import io
 import json
 import random
+import time
+from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any, Iterable, Optional
 
 from sqlmodel import Session, select
 
-from database.models import StudyItem, StudyModelRating, StudyRating, User
+from database.base import engine
+from database.models import StudyItem, StudyModelEndpoint, StudyModelRating, StudyRating, User
 
 # Spalten der Import-Datei (CSV oder JSON-Liste mit denselben Keys)
 REQUIRED_FIELDS = ("task_key", "task_title", "task_description", "max_points", "answer")
@@ -157,3 +162,157 @@ def summary(session: Session, course_id: int) -> dict:
         "models": sorted({m.model for m in model_ratings}),
         "raters": [{"name": names.get(rid, f"#{rid}"), "rated": n} for rid, n in sorted(per_rater.items())],
     }
+
+
+# ═══════════════════════════════════════════════════════════════════
+# LLM-Läufe (gemeinsam für Oberfläche und scripts/study_run_models.py)
+# ═══════════════════════════════════════════════════════════════════
+
+
+NO_SOLUTION = "(Keine Musterloesung hinterlegt — bitte eigenstaendig bewerten)"
+
+
+def mask_key(key: str) -> str:
+    if not key:
+        return ""
+    return "•" * 6 + key[-4:] if len(key) > 8 else "•" * 6
+
+
+def endpoint_public(ep: StudyModelEndpoint) -> dict:
+    """Endpoint für die Oberfläche — API-Key nur maskiert."""
+    return {"id": ep.id, "name": ep.name, "api_url": ep.api_url, "model": ep.model,
+            "enabled": ep.enabled, "api_key_masked": mask_key(ep.api_key)}
+
+
+def endpoint_config(ep: StudyModelEndpoint, timeout: int = 300) -> dict:
+    return {"api_url": ep.api_url, "api_key": ep.api_key or "none", "model": ep.model, "timeout": timeout}
+
+
+async def grade_item(llm, item: StudyItem, cfg: dict, prompt: Optional[str] = None) -> dict:
+    """Eine Antwort von einem Modell bewerten lassen (unabhängig, ohne Vor-Feedback)."""
+    t0 = time.monotonic()
+    try:
+        res = await llm.grade_text_task(
+            task_description=item.task_description,
+            model_solution=item.model_solution or NO_SOLUTION,
+            student_solution=item.answer,
+            max_points=item.max_points,
+            custom_prompt=prompt,
+            previous_feedback="",
+            config=cfg,
+        )
+    except Exception as e:  # Netzwerk/Endpoint-Fehler nicht durchreichen
+        res = {"success": False, "error": str(e)}
+    ms = int((time.monotonic() - t0) * 1000)
+    points, comment, error = None, "", None
+    if res.get("success"):
+        data = res.get("data") or {}
+        try:
+            points = max(0.0, min(float(data.get("points")), item.max_points))
+        except (TypeError, ValueError):
+            error = f"Keine gültige Punktzahl: {data.get('points')!r}"
+        comment = str(data.get("feedback") or "")
+    else:
+        error = str(res.get("error") or "unbekannter Fehler")
+    return {"points": points, "comment": comment, "error": error, "latency_ms": ms}
+
+
+def _already_done(session: Session, item_id: int, model: str, run: int, prompt_version: str) -> bool:
+    return session.exec(
+        select(StudyModelRating)
+        .where(StudyModelRating.item_id == item_id)
+        .where(StudyModelRating.model == model)
+        .where(StudyModelRating.run == run)
+        .where(StudyModelRating.prompt_version == prompt_version)
+        .where(StudyModelRating.points != None)  # noqa: E711 — fehlgeschlagene Läufe neu versuchen
+    ).first() is not None
+
+
+@dataclass
+class RunJob:
+    course_id: int
+    total: int = 0
+    done: int = 0
+    skipped: int = 0
+    errors: int = 0
+    current: str = ""
+    status: str = "running"          # running | finished | cancelled | failed
+    message: str = ""
+    started_at: str = field(default_factory=lambda: datetime.now().isoformat(timespec="seconds"))
+    cancel: bool = False
+
+    def public(self) -> dict:
+        return {k: v for k, v in self.__dict__.items() if k != "cancel"}
+
+
+async def run_models(course_id: int, endpoints: list[tuple[str, dict]], runs: int,
+                     prompt_version: str = "default", prompt: Optional[str] = None,
+                     job: Optional[RunJob] = None, log=print) -> RunJob:
+    """Alle Antworten eines Kurses von allen Endpoints `runs`-mal bewerten lassen.
+    Bereits erfolgreiche Läufe werden übersprungen (fortsetzbar)."""
+    from services.llm_service import LLMService
+    llm = LLMService()
+    job = job or RunJob(course_id=course_id)
+    with Session(engine) as session:
+        items = session.exec(select(StudyItem).where(StudyItem.course_id == course_id)).all()
+        job.total = len(items) * len(endpoints) * runs
+        for name, cfg in endpoints:
+            for item in items:
+                for run_no in range(1, runs + 1):
+                    if job.cancel:
+                        job.status, job.message = "cancelled", "Abgebrochen."
+                        return job
+                    job.current = f"{name} · Antwort {item.id} · Lauf {run_no}"
+                    if _already_done(session, item.id, name, run_no, prompt_version):  # type: ignore[arg-type]
+                        job.done += 1
+                        job.skipped += 1
+                        continue
+                    r = await grade_item(llm, item, cfg, prompt)
+                    session.add(StudyModelRating(item_id=item.id, model=name, run=run_no,  # type: ignore[arg-type]
+                                                 prompt_version=prompt_version, **r))
+                    session.commit()
+                    job.done += 1
+                    if r["points"] is None:
+                        job.errors += 1
+                    status = (f"{r['points']:g}/{item.max_points:g}" if r["points"] is not None
+                              else f"FEHLER: {r['error']}")
+                    log(f"[{job.done}/{job.total}] {job.current}: {status} ({r['latency_ms']} ms)")
+    job.status = "finished"
+    job.current = ""
+    job.message = f"Fertig: {job.done - job.skipped} neue Bewertungen, {job.skipped} übersprungen, {job.errors} Fehler."
+    return job
+
+
+# Laufende Hintergrund-Jobs pro Kurs (In-Memory; reicht für den lokalen Studienbetrieb).
+_JOBS: dict[int, RunJob] = {}
+
+
+def get_job(course_id: int) -> Optional[RunJob]:
+    return _JOBS.get(course_id)
+
+
+def start_job(course_id: int, runs: int, endpoint_ids: Optional[list[int]] = None) -> RunJob:
+    current = _JOBS.get(course_id)
+    if current and current.status == "running":
+        raise RuntimeError("Für diesen Kurs läuft bereits eine Bewertung.")
+    with Session(engine) as session:
+        q = select(StudyModelEndpoint).where(StudyModelEndpoint.course_id == course_id)
+        eps = [e for e in session.exec(q).all()
+               if (e.id in endpoint_ids if endpoint_ids else e.enabled)]
+        endpoints = [(e.name, endpoint_config(e)) for e in eps]
+        n_items = len(session.exec(select(StudyItem.id).where(StudyItem.course_id == course_id)).all())
+    if not endpoints:
+        raise RuntimeError("Keine aktiven Modelle ausgewählt.")
+    if not n_items:
+        raise RuntimeError("Noch keine Antworten importiert.")
+    job = RunJob(course_id=course_id, total=n_items * len(endpoints) * runs)
+    _JOBS[course_id] = job
+
+    async def _runner():
+        try:
+            await run_models(course_id, endpoints, runs, job=job, log=lambda *_: None)
+        except Exception as e:  # pragma: no cover
+            job.status, job.message = "failed", f"Fehler: {e}"
+
+    asyncio.get_running_loop().create_task(_runner())
+    return job

@@ -39,6 +39,68 @@
         </a>
       </div>
     </div>
+
+    <!-- Modelle (LLM-Endpoints) -->
+    <div class="mt-6 border-t border-gray-200 pt-4">
+      <h3 class="font-semibold text-gray-800 mb-1">🤖 Modelle</h3>
+      <p class="text-xs text-gray-500 mb-3">
+        Beliebige OpenAI-kompatible APIs: lokales Ollama, GPU-Server (vLLM) oder kostenlose Cloud-Anbieter.
+        Der Name erscheint so in den Ergebnissen. Entfernen löscht keine bisherigen Bewertungen.
+      </p>
+      <table class="w-full text-sm mb-3">
+        <thead><tr class="text-left text-gray-500">
+          <th class="py-1">Aktiv</th><th>Name</th><th>Modell</th><th>API-URL</th><th>Key</th><th></th>
+        </tr></thead>
+        <tbody id="ep-body"></tbody>
+      </table>
+
+      <form id="ep-form" class="grid gap-2 md:grid-cols-6 items-end bg-gray-50 rounded-lg p-3">
+        <div class="md:col-span-1">
+          <label class="block text-xs text-gray-600 mb-1">Vorlage</label>
+          <select id="ep-preset" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+            <option value="">– eigene –</option>
+            <option value="ollama">Ollama (lokal)</option>
+            <option value="openrouter">OpenRouter</option>
+            <option value="groq">Groq</option>
+          </select>
+        </div>
+        <div class="md:col-span-1">
+          <label class="block text-xs text-gray-600 mb-1">Modell *</label>
+          <input id="ep-model" required placeholder="qwen3:4b" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+        </div>
+        <div class="md:col-span-1">
+          <label class="block text-xs text-gray-600 mb-1">Name (optional)</label>
+          <input id="ep-name" placeholder="= Modell" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+        </div>
+        <div class="md:col-span-2">
+          <label class="block text-xs text-gray-600 mb-1">API-URL *</label>
+          <input id="ep-url" required placeholder="http://localhost:11434/v1" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+        </div>
+        <div class="md:col-span-1">
+          <label class="block text-xs text-gray-600 mb-1">API-Key</label>
+          <input id="ep-key" type="password" placeholder="ollama" class="w-full border border-gray-300 rounded px-2 py-1.5 text-sm">
+        </div>
+        <div class="md:col-span-6">
+          <button type="submit" class="px-3 py-1.5 rounded-lg bg-blue-600 text-white text-sm font-medium hover:bg-blue-700">+ Modell hinzufügen</button>
+        </div>
+      </form>
+
+      <!-- Läufe -->
+      <div class="mt-4 flex items-center gap-3 flex-wrap">
+        <label class="text-sm text-gray-700">Wiederholungen pro Antwort</label>
+        <input id="run-count" type="number" min="1" max="20" value="3" class="w-20 border border-gray-300 rounded px-2 py-1.5 text-sm">
+        <button id="run-start" class="px-3 py-1.5 rounded-lg bg-purple-600 text-white text-sm font-medium hover:bg-purple-700">
+          ▶ Alle Antworten von aktiven Modellen bewerten lassen
+        </button>
+        <button id="run-cancel" class="hidden px-3 py-1.5 rounded-lg border border-gray-300 text-sm text-gray-700 hover:bg-gray-50">Abbrechen</button>
+      </div>
+      <div id="run-box" class="hidden mt-3">
+        <div class="w-full bg-gray-100 rounded-full h-2">
+          <div id="run-bar" class="bg-purple-600 h-2 rounded-full transition-all" style="width:0%"></div>
+        </div>
+        <div id="run-text" class="text-xs text-gray-600 mt-1"></div>
+      </div>
+    </div>
   </details>
   {% endif %}
 
@@ -224,9 +286,10 @@
       `<div><b>${s.items}</b> Antworten in <b>${s.tasks}</b> Aufgaben</div>
        <div><b>${s.human_ratings}</b> Tutor-Bewertungen</div>
        <div><b>${s.model_ratings}</b> Modell-Bewertungen</div>
-       <div class="text-xs text-gray-500 mt-2">Modelle: ${s.models.join(", ") || "–"}</div>
+       <div class="text-xs text-gray-500 mt-2">Modelle: <span id="models-list"></span></div>
        <div class="text-xs text-gray-500">Tutor:innen: <span id="raters"></span></div>`;
     $("raters").textContent = raters;
+    $("models-list").textContent = s.models.join(", ") || "–";
   }
   $("import-form").addEventListener("submit", async (e) => {
     e.preventDefault();
@@ -240,6 +303,117 @@
     loadSummary(); load();
   });
   loadSummary();
+
+  // ── Modelle ──
+  const PRESETS = {
+    ollama: { url: "http://localhost:11434/v1", key: "ollama", model: "qwen3:4b" },
+    openrouter: { url: "https://openrouter.ai/api/v1", key: "", model: "qwen/qwen3-8b:free" },
+    groq: { url: "https://api.groq.com/openai/v1", key: "", model: "llama-3.1-8b-instant" },
+  };
+  $("ep-preset").addEventListener("change", (e) => {
+    const p = PRESETS[e.target.value]; if (!p) return;
+    $("ep-url").value = p.url; $("ep-model").value = p.model; $("ep-key").value = p.key;
+  });
+
+  async function jsonFetch(url, opts = {}) {
+    const res = await fetch(url, { credentials: "same-origin",
+      headers: { "Content-Type": "application/json" }, ...opts });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.detail || `Fehler ${res.status}`);
+    return data;
+  }
+
+  async function loadEndpoints() {
+    const eps = await jsonFetch(`${api}/endpoints`);
+    const body = $("ep-body"); body.innerHTML = "";
+    if (!eps.length) {
+      body.innerHTML = '<tr><td colspan="6" class="py-2 text-gray-500">Noch keine Modelle eingetragen.</td></tr>';
+    }
+    eps.forEach((ep) => {
+      const tr = document.createElement("tr");
+      tr.className = "border-t border-gray-100 align-top";
+      tr.innerHTML = `<td class="py-1.5"><input type="checkbox" ${ep.enabled ? "checked" : ""}></td>
+        <td class="font-medium"></td><td></td><td class="text-xs text-gray-500 break-all"></td><td class="text-xs text-gray-400"></td>
+        <td class="whitespace-nowrap text-right">
+          <button data-a="test" class="text-blue-600 hover:underline text-xs mr-2">testen</button>
+          <button data-a="del" class="text-red-600 hover:underline text-xs">entfernen</button>
+          <div class="ep-result text-xs mt-1"></div></td>`;
+      tr.children[1].textContent = ep.name;
+      tr.children[2].textContent = ep.model;
+      tr.children[3].textContent = ep.api_url;
+      tr.children[4].textContent = ep.api_key_masked || "–";
+      tr.querySelector("input").onchange = async (e) => {
+        try { await jsonFetch(`${api}/endpoints/${ep.id}`, { method: "PATCH", body: JSON.stringify({ enabled: e.target.checked }) }); }
+        catch (err) { showToast(err.message, "error"); e.target.checked = !e.target.checked; }
+      };
+      const out = tr.querySelector(".ep-result");
+      tr.querySelector('[data-a="test"]').onclick = async () => {
+        out.className = "ep-result text-xs mt-1 text-gray-500"; out.textContent = "Teste …";
+        try {
+          const r = await jsonFetch(`${api}/endpoints/${ep.id}/test`, { method: "POST" });
+          out.className = "ep-result text-xs mt-1 " + (r.ok ? "text-green-700" : "text-red-600");
+          out.textContent = r.ok ? `✓ ${r.points} / ${r.max_points} Punkte (${(r.latency_ms / 1000).toFixed(1)} s)`
+                                 : `✗ ${r.error}`;
+        } catch (err) { out.className = "ep-result text-xs mt-1 text-red-600"; out.textContent = "✗ " + err.message; }
+      };
+      tr.querySelector('[data-a="del"]').onclick = async () => {
+        if (!confirm(`Modell „${ep.name}“ entfernen? Bisherige Bewertungen bleiben erhalten.`)) return;
+        try { await jsonFetch(`${api}/endpoints/${ep.id}`, { method: "DELETE" }); loadEndpoints(); }
+        catch (err) { showToast(err.message, "error"); }
+      };
+      body.appendChild(tr);
+    });
+  }
+
+  $("ep-form").addEventListener("submit", async (e) => {
+    e.preventDefault();
+    try {
+      await jsonFetch(`${api}/endpoints`, { method: "POST", body: JSON.stringify({
+        name: $("ep-name").value, model: $("ep-model").value,
+        api_url: $("ep-url").value, api_key: $("ep-key").value }) });
+      showToast("Modell hinzugefügt.", "success");
+      ["ep-name", "ep-model", "ep-url", "ep-key"].forEach((id) => ($(id).value = ""));
+      $("ep-preset").value = "";
+      loadEndpoints();
+    } catch (err) { showToast(err.message, "error"); }
+  });
+
+  // ── Läufe ──
+  let pollTimer = null;
+  function showJob(j) {
+    const running = j.status === "running";
+    $("run-cancel").classList.toggle("hidden", !running);
+    $("run-start").disabled = running;
+    $("run-start").classList.toggle("opacity-50", running);
+    if (j.status === "idle") { $("run-box").classList.add("hidden"); return; }
+    $("run-box").classList.remove("hidden");
+    $("run-bar").style.width = j.total ? `${Math.round(100 * j.done / j.total)}%` : "0%";
+    $("run-text").textContent = running
+      ? `${j.done} / ${j.total} · ${j.current}${j.errors ? ` · ${j.errors} Fehler` : ""}`
+      : (j.message || j.status);
+  }
+  async function pollJob() {
+    try {
+      const j = await jsonFetch(`${api}/runs/status`);
+      showJob(j);
+      clearTimeout(pollTimer);
+      if (j.status === "running") pollTimer = setTimeout(pollJob, 1500);
+      else if (j.status !== "idle") loadSummary();
+    } catch (err) { /* still */ }
+  }
+  $("run-start").addEventListener("click", async () => {
+    try {
+      const j = await jsonFetch(`${api}/runs`, { method: "POST", body: JSON.stringify({ runs: parseInt($("run-count").value, 10) }) });
+      showJob(j); pollJob();
+    } catch (err) { showToast(err.message, "error"); }
+  });
+  $("run-cancel").addEventListener("click", async () => {
+    await jsonFetch(`${api}/runs/cancel`, { method: "POST" }).catch(() => {});
+    pollJob();
+  });
+
+  loadEndpoints();
+  pollJob();
   {% endif %}
 
   load();

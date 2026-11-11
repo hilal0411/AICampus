@@ -20,6 +20,16 @@ streuen.
 - **Zufällige Reihenfolge je Tutor:in** (fest pro Person), gegen
   Reihenfolge-Effekte.
 
+## Einrichtung (lokal)
+
+```bash
+python3.12 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env
+bash scripts/fetch_vendor.sh      # JS-Bibliotheken (Markdown/LaTeX-Rendering), nicht im Repo
+uvicorn main:app --reload         # → http://localhost:8000, Login admin/admin
+```
+
 ## Ablauf
 
 1. **Kurs anlegen** (Admin-Konsole) und Tutor:innen als `TUTOR` hinzufügen.
@@ -28,7 +38,8 @@ streuen.
 3. **Tutor:innen bewerten** im selben Tab: Antwort lesen, Punkte und optional
    eine Begründung eingeben, *Speichern & nächste Antwort*. Eigene Bewertungen
    lassen sich über *Meine Bewertungen* nachträglich ändern.
-4. **Modelle bewerten lassen** (siehe unten).
+4. **Modelle bewerten lassen:** im selben Bereich unter *🤖 Modelle* (siehe unten)
+   oder per Skript.
 5. **Exportieren:** *Alle Bewertungen als CSV exportieren* (PROF/Admin).
 
 ## Import-Format
@@ -48,7 +59,31 @@ Beispiel: [`blind-grading-example.csv`](blind-grading-example.csv)
 | `error_type` | nein | z. B. `korrekt`, `kleiner-fehler`, `fehlkonzept`, `off-topic`. **Nie sichtbar.** |
 | `source` | nein | z. B. `handgeschrieben`, `llm:qwen3`. **Nie sichtbar.** |
 
-## Modelle bewerten lassen
+## Modelle in der Oberfläche
+
+Unter *Studie verwalten → 🤖 Modelle* (PROF/Admin):
+
+- **Modell hinzufügen:** Modellname, API-URL, API-Key, optional ein eigener
+  Name (= Label in den Ergebnissen). Vorlagen für Ollama, OpenRouter, Groq.
+- **testen:** bewertet die erste importierte Antwort einmal und zeigt Punkte,
+  Dauer oder die Fehlermeldung. Speichert nichts.
+- **Aktiv-Häkchen:** nur aktive Modelle laufen mit. **entfernen** löscht den
+  Endpoint, aber keine bisherigen Bewertungen.
+- **▶ Alle Antworten … bewerten lassen:** läuft im Hintergrund mit
+  Fortschrittsbalken, abbrechbar; bereits erfolgreiche Läufe werden
+  übersprungen.
+
+| Anbieter | API-URL | Beispiel-Modell |
+|---|---|---|
+| Ollama (lokal) | `http://localhost:11434/v1` (Key: `ollama`) | `qwen3:4b`, `qwen2.5:3b` |
+| OpenRouter | `https://openrouter.ai/api/v1` | Modelle mit `:free` |
+| Groq | `https://api.groq.com/openai/v1` | `llama-3.1-8b-instant` |
+| vLLM (GPU-Server) | `http://<server>:8000/v1` | `Qwen3-32B` |
+
+API-Keys werden in der lokalen Datenbank gespeichert und in der Oberfläche nur
+maskiert angezeigt.
+
+## Modelle per Skript bewerten lassen
 
 `scripts/study_run_models.py` schickt jede Antwort mit dem normalen
 AICampus-Grading-Prompt an ein oder mehrere OpenAI-kompatible Endpoints,
@@ -65,8 +100,8 @@ python scripts/study_run_models.py --course 3 \
     --models "Qwen3-32B=http://gpu1:8000/v1,qwen3:8b=http://localhost:11434/v1"
 ```
 
-Ohne `--models`/`--api-url` wird das Modell aus Kurs-/Admin-Settings bzw.
-`.env` genommen. Bereits erfolgreiche Läufe werden übersprungen, das Skript
+Ohne `--models`/`--api-url` werden die in der Oberfläche eingetragenen,
+aktiven Modelle genommen (sonst das Modell aus Kurs-/Admin-Settings bzw. `.env`). Bereits erfolgreiche Läufe werden übersprungen, das Skript
 kann also abgebrochen und fortgesetzt werden. Mit `--prompt-file` und
 `--prompt-version` lassen sich Prompt-Varianten vergleichen.
 
@@ -87,9 +122,10 @@ die Läufe, Übereinstimmungsmaße (ICC, Krippendorffs α).
 
 | Datei | Inhalt |
 |---|---|
-| `database/models.py` (unten) | `StudyItem`, `StudyRating`, `StudyModelRating` |
-| `services/blind_grading_service.py` | Import, Reihenfolge, Export, Übersicht |
+| `database/models.py` (unten) | `StudyItem`, `StudyRating`, `StudyModelRating`, `StudyModelEndpoint` |
+| `services/blind_grading_service.py` | Import, Reihenfolge, Export, Übersicht, Modell-Läufe (Hintergrund-Job) |
 | `api/blind_grading.py` | REST unter `/api/blind/…` |
 | `templates/course/blind_grading.html` | Tab *Blind-Bewertung* |
 | `main.py` | Seite `/courses/{id}/blind-grading` + Tab |
-| `scripts/study_run_models.py` | LLM-Läufe |
+| `scripts/study_run_models.py` | LLM-Läufe per Kommandozeile |
+| `scripts/fetch_vendor.sh` | lädt fehlende JS-Bibliotheken nach `static/vendor/` |

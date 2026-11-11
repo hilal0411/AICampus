@@ -1693,3 +1693,23 @@ class StudyModelRating(SQLModel, table=True):
     error: Optional[str] = Field(default=None)
     latency_ms: Optional[int] = Field(default=None)
     created_at: datetime = Field(default_factory=datetime.now)
+
+
+class StudyModelEndpoint(SQLModel, table=True):
+    """Ein LLM-Endpoint für die Studie (in der Oberfläche hinzufügen/entfernen).
+
+    Beliebige OpenAI-kompatible APIs: lokales Ollama, vLLM auf einem
+    GPU-Server, kostenlose Cloud-Anbieter (OpenRouter, Groq, …).
+    `name` ist das Label in den Ergebnissen (StudyModelRating.model).
+    """
+    __tablename__ = "study_model_endpoints"
+    __table_args__ = (UniqueConstraint("course_id", "name", name="uq_study_endpoint_course_name"),)
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    course_id: int = Field(foreign_key="courses.id", index=True)
+    name: str = Field(max_length=200)          # Anzeige/Ergebnis-Label, z. B. "qwen3:4b (lokal)"
+    api_url: str = Field(max_length=500)        # z. B. http://localhost:11434/v1
+    api_key: str = Field(default="", max_length=500)
+    model: str = Field(max_length=200)          # Modellname beim Anbieter, z. B. "qwen3:4b"
+    enabled: bool = Field(default=True)
+    created_at: datetime = Field(default_factory=datetime.now)
